@@ -1,0 +1,129 @@
+# Règles d'alertes Prometheus pour XCSM
+
+groups:
+  - name: xcsm_alerts
+    interval: 30s
+    rules:
+      # ==============================================================================
+      # ALERTES API
+      # ==============================================================================
+
+      - alert: APIDown
+        expr: up{job="django-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API Django est DOWN"
+          description: "L'API Django n'est plus accessible depuis {{ $value }}s"
+
+      - alert: HighAPIResponseTime
+        expr: http_request_duration_seconds_sum / http_request_duration_seconds_count > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Temps de réponse API élevé"
+          description: "Temps de réponse moyen: {{ $value }}s"
+
+      - alert: HighAPIErrorRate
+        expr: rate(http_requests_total{status=~"5.."}[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Taux d'erreur API élevé"
+          description: "{{ $value }}% d'erreurs 5xx"
+
+      # ==============================================================================
+      # ALERTES CELERY
+      # ==============================================================================
+
+      - alert: CeleryWorkerDown
+        expr: up{job="celery-worker"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Worker Celery DOWN"
+          description: "Aucun worker Celery actif"
+
+      - alert: CeleryQueueBacklog
+        expr: celery_tasks_total{state="PENDING"} > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "File d'attente Celery surchargée"
+          description: "{{ $value }} tâches en attente"
+
+      - alert: HighCeleryFailureRate
+        expr: rate(celery_tasks_total{state="FAILURE"}[10m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Taux d'échec Celery élevé"
+          description: "{{ $value }}% des tâches échouent"
+
+      # ==============================================================================
+      # ALERTES BASES DE DONNÉES
+      # ==============================================================================
+
+      - alert: MySQLDown
+        expr: up{job="mysql"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "MySQL est DOWN"
+          description: "Base MySQL inaccessible"
+
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis est DOWN"
+          description: "Broker Redis inaccessible"
+
+      - alert: HighRedisMemoryUsage
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mémoire Redis presque pleine"
+          description: "{{ $value | humanizePercentage }} de mémoire utilisée"
+
+      # ==============================================================================
+      # ALERTES SYSTÈME
+      # ==============================================================================
+
+      - alert: HighCPUUsage
+        expr: 100 - (avg by(instance) (irate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Utilisation CPU élevée"
+          description: "CPU à {{ $value }}%"
+
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mémoire RAM presque pleine"
+          description: "{{ $value }}% de RAM utilisée"
+
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Espace disque faible"
+          description: "{{ $value }}% d'espace disponible"

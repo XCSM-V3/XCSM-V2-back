@@ -1,0 +1,238 @@
+version: '3.8'
+
+services:
+  # ==============================================================================
+  # BASE DE DONNÉES
+  # ==============================================================================
+
+  mysql:
+    image: mysql:8.0
+    container_name: xcsm_mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${DB_NAME:-xcsm_db}
+      MYSQL_USER: ${DB_USER:-xcsm_user}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-Xcsm@Password2025!}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - xcsm_network
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost" ]
+      timeout: 20s
+      retries: 10
+    restart: unless-stopped
+
+  mongodb:
+    image: mongo:7.0
+    container_name: xcsm_mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER:-admin}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:-mongopassword}
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks: -xcsm_network
+    healthcheck:
+      test: [ "CMD", "mongosh", "--eval", "db.adminCommand('ping')" ]
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # ==============================================================================
+  # BROKER REDIS
+  # ==============================================================================
+
+  redis:
+    image: redis:7-alpine
+    container_name: xcsm_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - xcsm_network
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+
+  # ==============================================================================
+  # API DJANGO
+  # ==============================================================================
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: xcsm_api
+    environment:
+      - DEBUG=${DEBUG:-False}
+      - SECRET_KEY=${SECRET_KEY:-django-insecure-change-this}
+      - DB_NAME=${DB_NAME:-xcsm_db}
+      - DB_USER=${DB_USER:-xcsm_user}
+      - DB_PASSWORD=${DB_PASSWORD:-Xcsm@Password2025!}
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - MONGO_HOST=mongodb
+      - MONGO_PORT=27017
+      - MONGO_USER=${MONGO_USER:-admin}
+      - MONGO_PASSWORD=${MONGO_PASSWORD:-mongopassword}
+      - REDIS_URL=redis://redis:6379/0
+      - ALLOWED_HOSTS=localhost,127.0.0.1,api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./media:/app/media
+      - ./logs:/app/logs
+    depends_on:
+      mysql:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - xcsm_network
+    restart: unless-stopped
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py collectstatic --noinput &&
+             gunicorn --bind 0.0.0.0:8000 --workers 4 --timeout 300 xcsm_project.wsgi:application"
+
+  # ==============================================================================
+  # CELERY WORKER
+  # ==============================================================================
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: xcsm_worker
+    environment:
+      - DEBUG=${DEBUG:-False}
+      - SECRET_KEY=${SECRET_KEY:-django-insecure-change-this}
+      - DB_NAME=${DB_NAME:-xcsm_db}
+      - DB_USER=${DB_USER:-xcsm_user}
+      - DB_PASSWORD=${DB_PASSWORD:-Xcsm@Password2025!}
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - MONGO_HOST=mongodb
+      - MONGO_PORT=27017
+      - MONGO_USER=${MONGO_USER:-admin}
+      - MONGO_PASSWORD=${MONGO_PASSWORD:-mongopassword}
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./media:/app/media
+      - ./logs:/app/logs
+    depends_on:
+      - mysql
+      - mongodb
+      - redis
+      - api
+    networks:
+      - xcsm_network
+    restart: unless-stopped
+
+  # ==============================================================================
+  # MONITORING - PROMETHEUS
+  # ==============================================================================
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: xcsm_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    networks:
+      - xcsm_network
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+    restart: unless-stopped
+
+  # ==============================================================================
+  # MONITORING - GRAFANA
+  # ==============================================================================
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: xcsm_grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_INSTALL_PLUGINS=redis-datasource
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    depends_on:
+      - prometheus
+    networks:
+      - xcsm_network
+    restart: unless-stopped
+
+  # ==============================================================================
+  # EXPORTERS POUR MONITORING
+  # ==============================================================================
+
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: xcsm_redis_exporter
+    environment:
+      - REDIS_ADDR=redis:6379
+    ports:
+      - "9121:9121"
+    depends_on:
+      - redis
+    networks:
+      - xcsm_network
+    restart: unless-stopped
+
+  mysql-exporter:
+    image: prom/mysqld-exporter:latest
+    container_name: xcsm_mysql_exporter
+    environment:
+      - DATA_SOURCE_NAME=${DB_USER:-xcsm_user}:${DB_PASSWORD:-Xcsm@Password2025!}@(mysql:3306)/${DB_NAME:-xcsm_db}
+    ports:
+      - "9104:9104"
+    depends_on:
+      - mysql
+    networks:
+      - xcsm_network
+    restart: unless-stopped
+
+# ==============================================================================
+# VOLUMES PERSISTANTS
+# ==============================================================================
+
+volumes:
+  mysql_data:
+    driver: local
+  mongodb_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+# ==============================================================================
+# RÉSEAU
+# ==============================================================================
+
+networks:
+  xcsm_network:
+    driver: bridge

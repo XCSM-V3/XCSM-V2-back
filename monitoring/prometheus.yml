@@ -1,0 +1,66 @@
+# Configuration Prometheus pour monitoring XCSM
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: "xcsm-production"
+    replica: "prometheus-1"
+
+# ==============================================================================
+# RÈGLES D'ALERTES
+# ==============================================================================
+
+rule_files:
+  - "alerts.yml"
+
+# ==============================================================================
+# TARGETS À SCRAPER
+# ==============================================================================
+
+scrape_configs:
+  # API Django (Django-Prometheus)
+  - job_name: "django-api"
+    static_configs:
+      - targets: ["api:8000"]
+        labels:
+          service: "api"
+          environment: "production"
+    metrics_path: "/metrics"
+    scrape_interval: 10s
+
+  # Redis Exporter
+  - job_name: "redis"
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+        labels:
+          service: "redis"
+          environment: "production"
+    scrape_interval: 10s
+
+  # MySQL Exporter
+  - job_name: "mysql"
+    static_configs:
+      - targets: ["mysql-exporter:9104"]
+        labels:
+          service: "mysql"
+          environment: "production"
+    scrape_interval: 30s
+
+  # Celery Worker (via Prometheus client)
+  - job_name: "celery-worker"
+    static_configs:
+      - targets: ["worker:9808"]
+        labels:
+          service: "celery"
+          environment: "production"
+    scrape_interval: 10s
+
+  # Node Exporter (optionnel - métriques système)
+  - job_name: "node"
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          service: "system"
+          environment: "production"
+    scrape_interval: 30s
