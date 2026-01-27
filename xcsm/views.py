@@ -248,8 +248,20 @@ class DocumentUploadView(generics.CreateAPIView):
         print(f"🚀 [API] Upload reçu. Démarrage du traitement ASYNCHRONE (Celery) pour : {instance.titre}")
         
         # Lancement du traitement via Celery
-        from .tasks import process_document_task
-        process_document_task.delay(instance.id)
+        try:
+            from .tasks import process_document_task
+            print(f"🚀 [API] Tentative dispatch Celery pour ID: {instance.id}")
+            process_document_task.delay(instance.id)
+            print(f"✅ [API] Dispatch Celery SUCCÈS pour ID: {instance.id}")
+        except Exception as e:
+            print(f"❌ [API] ERREUR CRITIQUE dispatch Celery: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            # On ne plante pas l'upload, mais on signale l'erreur
+            response_data = serializer.data
+            response_data['message'] = f"Fichier uploadé, mais erreur lancement traitement : {str(e)}"
+            response_data['statut'] = "ERREUR_LANCEMENT"
+            return Response(response_data, status=status.HTTP_202_ACCEPTED, headers=headers)
         
         # Réponse immédiate
         response_data = serializer.data
