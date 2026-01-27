@@ -166,17 +166,32 @@ def search_in_granules(query, fichier_source=None):
     """
     try:
         mongo_db = get_mongo_db()
+        import re
+
+        # 1. Nettoyage et découpage en mots-clés
+        cleaned_query = re.sub(r'[^\w\s]', ' ', query)
+        keywords = [re.escape(w) for w in cleaned_query.split() if w.strip()]
         
-        # Construction du filtre
+        if not keywords:
+            keywords = [re.escape(query)]
+
+        # 2. Construction des conditions pour CHAQUE mot-clé
+        keyword_conditions = []
+        for word in keywords:
+            keyword_conditions.append({
+                "$or": [
+                    {"content": {"$regex": word, "$options": "i"}},
+                    {"html": {"$regex": word, "$options": "i"}}
+                ]
+            })
+
+        # 3. Requête finale : (Mot1 AND Mot2 AND ...)
         filter_query = {
-            "$or": [
-                {"content": {"$regex": query, "$options": "i"}},
-                {"html": {"$regex": query, "$options": "i"}}
-            ]
+            "$and": keyword_conditions
         }
         
         if fichier_source:
-            filter_query["fichier_source_id"] = str(fichier_source.id)
+             filter_query["$and"].append({"fichier_source_id": str(fichier_source.id)})
         
         results = list(mongo_db['granules'].find(filter_query).limit(50))
         
@@ -191,31 +206,45 @@ def search_in_granules(query, fichier_source=None):
         return []
 
 
+    except Exception as e:
+        print(f"❌ Erreur search_in_granules_filtered: {e}")
+        return []
+
 def search_in_granules_filtered(query, fichier_source_ids):
     """
-    Recherche dans les granules MongoDB avec filtrage par fichiers sources autorisés.
-    Utilisé pour la recherche avec contrôle d'accès basé sur les rôles.
-    
-    Args:
-        query (str): Terme de recherche
-        fichier_source_ids (list): Liste des IDs de fichiers sources autorisés
-        
-    Returns:
-        list: Liste des granules correspondants
+    Recherche dans les granules MongoDB avec filtrage par fichiers sources.
+    Mode "Mots-clés" : Tous les mots doivent être présents (AND), peu importe l'ordre ou les séparateurs.
     """
     try:
         mongo_db = get_mongo_db()
+        import re
         
-        # Construction du filtre avec recherche ET filtrage par fichiers
+        # 1. Nettoyage et découpage en mots-clés
+        # On remplace tout ce qui n'est pas alphanumérique par des espaces
+        # Cela permet de traiter "Nom - Prénom" comme ["Nom", "Prénom"]
+        cleaned_query = re.sub(r'[^\w\s]', ' ', query)
+        keywords = [re.escape(w) for w in cleaned_query.split() if w.strip()]
+        
+        if not keywords:
+            # Si le nettoyage supprime tout (ex: que des symboles), on garde la requête brute échappée
+            keywords = [re.escape(query)]
+
+        # 2. Construction des conditions pour CHAQUE mot-clé
+        # Chaque mot doit être présent dans (content OU html OU titre)
+        keyword_conditions = []
+        for word in keywords:
+            keyword_conditions.append({
+                "$or": [
+                    {"content": {"$regex": word, "$options": "i"}},
+                    {"html": {"$regex": word, "$options": "i"}},
+                    {"titre": {"$regex": word, "$options": "i"}}
+                ]
+            })
+
+        # 3. Requête finale : (Mot1 AND Mot2 AND ...) AND (Fichier autorisé)
         filter_query = {
             "$and": [
-                {
-                    "$or": [
-                        {"content": {"$regex": query, "$options": "i"}},
-                        {"html": {"$regex": query, "$options": "i"}},
-                        {"titre": {"$regex": query, "$options": "i"}}
-                    ]
-                },
+                {"$and": keyword_conditions},
                 {
                     "fichier_source_id": {"$in": [str(fid) for fid in fichier_source_ids]}
                 }
