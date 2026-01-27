@@ -249,26 +249,37 @@ class DocumentUploadView(generics.CreateAPIView):
         
         # Lancement du traitement via Celery
         try:
-            from .tasks import process_document_task
-            print(f"🚀 [API] Tentative dispatch Celery pour ID: {instance.id}")
-            process_document_task.delay(instance.id)
-            print(f"✅ [API] Dispatch Celery SUCCÈS pour ID: {instance.id}")
+            # MODE SYNCHRONE (POUR RENDER GRATUIT)
+            # Puisque le Worker ne partage pas le disque avec le Web, on doit tout faire ici.
+            from .processing import process_and_store_document
+            print(f"🚀 [API] Traitement SYNCHRONE immédiat pour ID: {instance.id}")
+            
+            # Appel direct de la fonction de traitement
+            success, message = process_and_store_document(instance)
+            
+            if success:
+                print(f"✅ [API] Traitement SUCCÈS pour ID: {instance.id}")
+                # Réponse immédiate avec succès
+                response_data = serializer.data
+                response_data['message'] = f"Document traité avec succès: {message}"
+                response_data['statut'] = "TRAITE"
+                # On triche un peu sur le code retour pour dire "Tout est fini"
+                return Response(response_data, status=status.HTTP_201_CREATED, headers=headers)
+            else:
+                print(f"❌ [API] Echec du traitement: {message}")
+                response_data = serializer.data
+                response_data['message'] = f"Erreur lors du traitement: {message}"
+                response_data['statut'] = "ERREUR"
+                return Response(response_data, status=status.HTTP_202_ACCEPTED, headers=headers)
+
         except Exception as e:
-            print(f"❌ [API] ERREUR CRITIQUE dispatch Celery: {str(e)}")
+            print(f"❌ [API] ERREUR CRITIQUE traitement synchrone: {str(e)}")
             import traceback
             traceback.print_exc()
-            # On ne plante pas l'upload, mais on signale l'erreur
             response_data = serializer.data
-            response_data['message'] = f"Fichier uploadé, mais erreur lancement traitement : {str(e)}"
-            response_data['statut'] = "ERREUR_LANCEMENT"
-            return Response(response_data, status=status.HTTP_202_ACCEPTED, headers=headers)
-        
-        # Réponse immédiate
-        response_data = serializer.data
-        response_data['message'] = "Fichier uploadé. Traitement en cours en arrière-plan."
-        response_data['statut'] = "EN_ATTENTE"
-        
-        return Response(response_data, status=status.HTTP_202_ACCEPTED, headers=headers)
+            response_data['message'] = f"Erreur critique: {str(e)}"
+            response_data['statut'] = "ERREUR"
+            return Response(response_data, status=status.HTTP_500_INTERNAL_SERVER_ERROR, headers=headers)
 class DocumentUpdateStructureView(APIView):
     """
     Permet au professeur de corriger la structure (titres, granules) depuis l'éditeur.
