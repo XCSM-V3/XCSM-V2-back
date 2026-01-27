@@ -21,6 +21,7 @@ def get_mongo_db():
     else:
         masked = mongo_uri.split('@')[-1] if '@' in mongo_uri else '...'
         print(f"✅ [MONGO] URI chargée avec succès (Cluster: {masked})")
+        print(f"🔍 [MONGO] Raw URI repr: {repr(mongo_uri)}") # DEBUG: Voir caractères cachés
     
     client = MongoClient(mongo_uri)
     
