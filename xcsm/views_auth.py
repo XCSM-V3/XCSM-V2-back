@@ -11,7 +11,7 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
 from django.db import transaction
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 from .models import Utilisateur, Enseignant, Etudiant, Administrateur, Cours
 from .serializers import RegisterSerializer
@@ -272,7 +272,7 @@ def me_view(request):
 
 @api_view(['PUT'])
 @permission_classes([IsAuthenticated])
-@parser_classes([MultiPartParser, FormParser])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
 def update_profile_view(request):
     """PUT /api/auth/profile/"""
     utilisateur = request.user
@@ -282,6 +282,10 @@ def update_profile_view(request):
         utilisateur.last_name = request.data['nom']
     if 'prenom' in request.data:
         utilisateur.first_name = request.data['prenom']
+        
+    if 'email' in request.data and request.data['email']:
+        utilisateur.email = request.data['email']
+        utilisateur.username = request.data['email']  # Garder la synchro
         
     # GESTION DE LA PHOTO DE PROFIL
     if 'photo' in request.FILES:
