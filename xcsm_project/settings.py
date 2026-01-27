@@ -118,20 +118,25 @@ WSGI_APPLICATION = 'xcsm_project.wsgi.application'
 
 # xcsm_project/settings.py
 
-DATABASES = {    # ← ENLEVER UN "D" ICI
-    'default': {
-        'ENGINE': 'django.db.backends.mysql',
-        'NAME': os.getenv('DB_NAME', 'xcsm_db'),
-        'USER': os.getenv('DB_USER', 'xcsm_user'),
-        'PASSWORD': os.getenv('DB_PASSWORD', 'Xcsm@Password2025!'),
-        'HOST': os.getenv('DB_HOST', 'localhost'),
-        'PORT': os.getenv('DB_PORT', '3306'),
-        'OPTIONS': {
-            'charset': 'utf8mb4',
-            'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
-        },
-    }
+
+import dj_database_url
+
+# Database
+# https://docs.djangoproject.com/en/5.2/ref/settings/#databases
+
+DATABASES = {
+    'default': dj_database_url.config(
+        # En local, on garde MySQL par défaut si DATABASE_URL n'est pas défini
+        default=f"mysql://{os.getenv('DB_USER', 'xcsm_user')}:{os.getenv('DB_PASSWORD', 'Xcsm@Password2025!')}@{os.getenv('DB_HOST', 'localhost')}:{os.getenv('DB_PORT', '3306')}/{os.getenv('DB_NAME', 'xcsm_db')}",
+        conn_max_age=600,
+        conn_health_checks=True,
+    )
 }
+
+# CSRF & CORS Settings pour la Production
+# Important pour que Vercel puisse parler à Render
+CSRF_TRUSTED_ORIGINS = os.getenv('CSRF_TRUSTED_ORIGINS', 'http://localhost:3000').split(',')
+
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
 
