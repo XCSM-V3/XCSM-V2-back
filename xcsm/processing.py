@@ -615,7 +615,7 @@ def split_and_create_granules(fichier_source, json_structure, target_course_id=N
         defaults={
             'enseignant': fichier_source.enseignant,
             'description': f"Cours généré depuis {fichier_source.titre}",
-            'est_publie': False
+            'est_publie': True # AUTO-PUBLICATION pour visibilité immédiate
         }
     )
     
