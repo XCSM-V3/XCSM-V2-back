@@ -208,17 +208,30 @@ SIMPLE_JWT = {
 # CELERY + REDIS CONFIGURATION (Architecture Asynchrone)
 # ==============================================================================
 
+import ssl # Ajout pour les constantes SSL
+
 # Configuration du broker Redis pour Celery
 CELERY_BROKER_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 CELERY_RESULT_BACKEND = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 
 # Options SSL pour Upstash (Production)
 if 'rediss://' in CELERY_BROKER_URL:
+    # Fix 1: Paramètre dans l'URL pour satisfaire le parser strict
+    if 'ssl_cert_reqs' not in CELERY_BROKER_URL:
+        sep = '&' if '?' in CELERY_BROKER_URL else '?'
+        CELERY_BROKER_URL += f"{sep}ssl_cert_reqs=CERT_NONE"
+        CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+
+    # Fix 2: Configuration explicite du contexte SSL
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+
     CELERY_BROKER_USE_SSL = {
-        'ssl_cert_reqs': 'NONE'
+        'ssl_cert_reqs': ssl.CERT_NONE
     }
     CELERY_REDIS_BACKEND_USE_SSL = {
-        'ssl_cert_reqs': 'NONE'
+        'ssl_cert_reqs': ssl.CERT_NONE
     }
 
 # Sérialisation et sécurité
