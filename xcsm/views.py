@@ -612,8 +612,8 @@ class GranuleSearchView(APIView):
                 accessible_courses = Cours.objects.filter(enseignant=user.profil_enseignant)
                 user_role = 'enseignant'
             elif hasattr(user, 'profil_etudiant'):
-                # Étudiant : cours inscrits
-                accessible_courses = user.profil_etudiant.cours_suivis.all()
+                # Étudiant : cours inscrits (via Matières)
+                accessible_courses = Cours.objects.filter(matiere__etudiants_inscrits=user.profil_etudiant)
                 user_role = 'etudiant'
             else:
                 return Response(
