@@ -195,14 +195,20 @@ class CoursListSerializer(serializers.ModelSerializer):
     code = serializers.ReadOnlyField(source='matiere.code', default="N/A")
     
     nb_etudiants = serializers.SerializerMethodField()
+    enseignant_nom = serializers.SerializerMethodField()
 
     class Meta:
         model = Cours
         fields = [
             'id', 'titre', 'code', 'description', 'date_creation', 'matiere',
-            'nb_parties', 'progress', 'last_accessed', 'nb_etudiants'
+            'nb_parties', 'progress', 'last_accessed', 'nb_etudiants', 'enseignant_nom'
         ]
         read_only_fields = ['id', 'date_creation', 'matiere', 'nb_etudiants']
+
+    def get_enseignant_nom(self, obj):
+        if obj.enseignant and obj.enseignant.utilisateur:
+             return f"{obj.enseignant.utilisateur.first_name} {obj.enseignant.utilisateur.last_name}"
+        return "Enseignant Inconnu"
 
     def get_nb_etudiants(self, obj):
         if obj.matiere:
