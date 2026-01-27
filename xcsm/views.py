@@ -655,14 +655,64 @@ class GranuleSearchView(APIView):
                 "message": "Aucun contenu disponible"
             })
         
-        # Rechercher dans MongoDB avec filtrage
+        # 1. Recherche dans MongoDB (Contenu des granules)
         from .json_utils import search_in_granules_filtered
         mongo_results = search_in_granules_filtered(query, list(fichier_ids))
         
+        # 2. Recherche dans la structure SQL (Titres des Parties, Chapitres, Sections...)
+        # Si la recherche ne donne rien dans le texte, peut-être que c'est le titre d'un chapitre
+        from django.db.models import Q
+        import re
+        
+        # Sécurisation simple pour la recherche SQL
+        sql_query = query.strip()
+        
+        structure_results = []
+        
+        # On ne lance la recherche structurelle que si la requête est assez courte (< 50 chars)
+        if len(sql_query) < 50:
+             # Recherche dans les titres
+             from .models import Partie, Chapitre, Section, SousSection
+             
+             # Filtre de base : doit appartenir à un cours accessible
+             base_courses = accessible_courses
+             
+             # Recherche dans les Parties
+             parties = Partie.objects.filter(cours__in=base_courses, titre__icontains=sql_query)[:5]
+             for p in parties:
+                 # Trouver le premier granule
+                 g = Granule.objects.filter(sous_section__section__chapitre__partie=p).first()
+                 if g: structure_results.append((g, f"Match dans Partie: {p.titre}"))
+                 
+             # Chapitres
+             chapitres = Chapitre.objects.filter(partie__cours__in=base_courses, titre__icontains=sql_query)[:5]
+             for c in chapitres:
+                 g = Granule.objects.filter(sous_section__section__chapitre=c).first()
+                 if g: structure_results.append((g, f"Match dans Chapitre: {c.titre}"))
+
+             # Sections
+             sections = Section.objects.filter(chapitre__partie__cours__in=base_courses, titre__icontains=sql_query)[:5]
+             for s in sections:
+                 g = Granule.objects.filter(sous_section__section=s).first()
+                 if g: structure_results.append((g, f"Match dans Section: {s.titre}"))
+                 
+             # Sous-Sections
+             sous_sections = SousSection.objects.filter(section__chapitre__partie__cours__in=base_courses, titre__icontains=sql_query)[:5]
+             for ss in sous_sections:
+                 g = Granule.objects.filter(sous_section=ss).first()
+                 if g: structure_results.append((g, f"Match dans Sous-Section: {ss.titre}"))
+
+
         # Enrichir les résultats avec métadonnées MySQL
         enriched_results = []
+        seen_granule_ids = set() # Pour éviter les doublons
+        
+        # Traitement résultats MongoDB
         for result in mongo_results:
             mongo_contenu_id = result.get('_id') or result.get('granule_id')
+            # ... (reste du code enrichissement existant) ...
+            # Je dois copier/coller le bloc existant ou le réécrire ici.
+            # Pour faire simple dans le diff, je vais réécrire le bloc complet.
             
             try:
                 granule = Granule.objects.select_related(
@@ -670,6 +720,9 @@ class GranuleSearchView(APIView):
                     'sous_section__section__chapitre__partie__cours__enseignant__utilisateur',
                     'fichier_source'
                 ).get(mongo_contenu_id=mongo_contenu_id)
+                
+                if granule.id in seen_granule_ids: continue
+                seen_granule_ids.add(granule.id)
                 
                 cours = granule.sous_section.section.chapitre.partie.cours
                 
@@ -693,13 +746,57 @@ class GranuleSearchView(APIView):
                     },
                     'enseignant': cours.enseignant.utilisateur.get_full_name() if cours.enseignant else 'N/A',
                     'source_pdf_page': granule.source_pdf_page,
+                    'match_type': 'CONTENT'
                 })
             except Granule.DoesNotExist:
-                # Granule MongoDB existe mais pas dans MySQL (données incohérentes)
                 continue
-            except Exception as e:
-                print(f"⚠️ Erreur lors de l'enrichissement du granule {mongo_contenu_id}: {e}")
+            except Exception:
                 continue
+                
+        # Traitement résultats Structure SQL
+        for granule, match_reason in structure_results:
+            if granule.id in seen_granule_ids: continue
+            seen_granule_ids.add(granule.id)
+            
+            # On doit récupérer le contenu pour la preview (optionnel)
+            # ou juste mettre le reason
+            
+            try:
+               # Re-fetch pour select_related si besoin (mais g est déjà un objet)
+               # On va utiliser g tel quel mais il manque peut être les relations chargées
+               # Safety reload
+               granule = Granule.objects.select_related(
+                    'sous_section__section__chapitre__partie__cours',
+                    'sous_section__section__chapitre__partie__cours__enseignant__utilisateur'
+               ).get(id=granule.id)
+               
+               cours = granule.sous_section.section.chapitre.partie.cours
+                
+               enriched_results.append({
+                    'granule_id': str(granule.id),
+                    'mongo_id': granule.mongo_contenu_id,
+                    'titre': granule.titre,
+                    'type_contenu': granule.type_contenu,
+                    'ordre': granule.ordre,
+                    'content_preview': f"[{match_reason}] - Aller au contenu...",
+                    'cours': {
+                        'id': str(cours.id),
+                        'titre': cours.titre,
+                        'code': cours.code,
+                    },
+                    'chemin_hierarchique': {
+                        'partie': granule.sous_section.section.chapitre.partie.titre,
+                        'chapitre': granule.sous_section.section.chapitre.titre,
+                        'section': granule.sous_section.section.titre,
+                        'sous_section': granule.sous_section.titre,
+                    },
+                    'enseignant': cours.enseignant.utilisateur.get_full_name() if cours.enseignant else 'N/A',
+                    'source_pdf_page': granule.source_pdf_page,
+                    'match_type': 'STRUCTURE'
+                })
+            except Exception:
+                continue
+
         
         return Response({
             "query": query,
