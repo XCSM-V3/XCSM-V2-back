@@ -4,7 +4,7 @@ echo "Assurez-vous que votre Broker (RabbitMQ ou Redis) est lancé."
 echo "----------------------------------------------------------------"
 
 # Activation de l'environnement virtuel si besoin
-source env/bin/activate 2>/dev/null || echo "⚠️  Pas de virtualenv 'env' trouvé, on continue..."
+source venv/bin/activate 2>/dev/null || echo "⚠️  Pas de virtualenv 'venv' trouvé, on continue..."
 
 # Lancement du worker
 # -A xcsm_project : indique l'application Celery

@@ -2,7 +2,7 @@
 Utilitaires pour le logging et le tracking des opérations.
 """
 
-from datetime import datetime
+from django.utils import timezone
 from .models_tracking import ProcessingLog, UserActivityLog
 import logging
 import traceback
@@ -30,7 +30,7 @@ class ProcessingLogger:
         
     def __enter__(self):
         """Début de l'opération"""
-        self.start_time = datetime.now()
+        self.start_time = timezone.now()
         self.log_entry = ProcessingLog.objects.create(
             fichier_source=self.fichier_source,
             operation=self.operation,
@@ -42,7 +42,7 @@ class ProcessingLogger:
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Fin de l'opération"""
-        self.log_entry.completed_at = datetime.now()
+        self.log_entry.completed_at = timezone.now()
         self.log_entry.calculate_duration()
         
         if exc_type is None:

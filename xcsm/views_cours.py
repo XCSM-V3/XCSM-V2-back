@@ -7,7 +7,7 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from django.db.models import Q
 import uuid
 
@@ -20,55 +20,27 @@ from .serializers import (
     RessourceSerializer
 )
 from .json_utils import get_cours_complete_structure, get_granule_content
-from .ai_service import generate_exercises_from_granule
+
 
 # ============================================================================
 # HELPERS pour compatibilité avec différentes configurations de modèles
 # ============================================================================
 
+# ============================================================================
+# HELPERS pour compatibilité avec Matière
+# ============================================================================
+
 def get_cours_etudiants(cours):
-    """Récupère les étudiants d'un cours (compatible avec différentes relations)"""
-    try:
-        return cours.etudiants_inscrits.all()
-    except AttributeError:
-        try:
-            return Etudiant.objects.filter(cours_suivis=cours)
-        except:
-            return Etudiant.objects.none()
-
-
-def add_etudiant_to_cours(cours, etudiant):
-    """Inscrit un étudiant à un cours"""
-    try:
-        cours.etudiants_inscrits.add(etudiant)
-    except AttributeError:
-        try:
-            etudiant.cours_suivis.add(cours)
-        except:
-            pass
-
-
-def remove_etudiant_from_cours(cours, etudiant):
-    """Désinscrit un étudiant d'un cours"""
-    try:
-        cours.etudiants_inscrits.remove(etudiant)
-    except AttributeError:
-        try:
-            etudiant.cours_suivis.remove(cours)
-        except:
-            pass
-
+    """Récupère les étudiants inscrits à la matière du cours"""
+    if cours.matiere:
+        return cours.matiere.etudiants_inscrits.all()
+    return Etudiant.objects.none()
 
 def is_etudiant_inscrit(cours, etudiant):
-    """Vérifie si un étudiant est inscrit au cours"""
-    try:
-        return cours.etudiants_inscrits.filter(pk=etudiant.pk).exists()
-    except AttributeError:
-        try:
-            return etudiant.cours_suivis.filter(pk=cours.pk).exists()
-        except:
-            return False
-
+    """Vérifie si un étudiant est inscrit à la matière du cours"""
+    if cours.matiere:
+        return cours.matiere.etudiants_inscrits.filter(pk=etudiant.pk).exists()
+    return False
 
 # ============================================================================
 # VIEWSET COURS
@@ -80,7 +52,7 @@ class CoursViewSet(viewsets.ModelViewSet):
     """
     
     permission_classes = [IsAuthenticated]
-    parser_classes = [MultiPartParser, FormParser]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     
     def get_serializer_class(self):
         if self.action == 'create':
@@ -90,54 +62,44 @@ class CoursViewSet(viewsets.ModelViewSet):
         return CoursListSerializer
     
     def get_queryset(self):
-        queryset = Cours.objects.select_related('enseignant__utilisateur').all()
+        queryset = Cours.objects.select_related('matiere', 'enseignant__utilisateur').all()
+        user = self.request.user
         
-        # Filtrer par enseignant
-        enseignant_id = self.request.query_params.get('enseignant_id')
-        if enseignant_id:
-            queryset = queryset.filter(enseignant__pk=enseignant_id)
+        # 1. Si Enseignant -> Voir SES cours (via ses matières ou directement)
+        if hasattr(user, 'profil_enseignant'):
+            queryset = queryset.filter(enseignant=user.profil_enseignant)
+            
+        # 2. Si Etudiant -> Voir les cours des MATIÈRES où il est inscrit
+        elif hasattr(user, 'profil_etudiant'):
+            # On récupère les matières suivies
+            matieres_suivies = user.profil_etudiant.matieres_suivies.all()
+            queryset = queryset.filter(matiere__in=matieres_suivies)
+        
+        else:
+             # Admin ou inconnu -> Voir tout ou rien
+             if not user.is_staff:
+                 return Cours.objects.none()
+        
+        # Filtrer par Matière spécifique (si demandé par le frontend)
+        matiere_id = self.request.query_params.get('matiere_id')
+        if matiere_id:
+            queryset = queryset.filter(matiere__pk=matiere_id)
         
         # Filtrer par recherche
         search = self.request.query_params.get('search')
         if search:
             queryset = queryset.filter(
                 Q(titre__icontains=search) | 
-                Q(description__icontains=search) |
-                Q(code__icontains=search)
+                Q(description__icontains=search)
             )
         
         return queryset.order_by('-date_creation')
     
     def create(self, request, *args, **kwargs):
-        """POST /api/v1/cours/ - Créer un cours"""
-        try:
-            enseignant = Enseignant.objects.get(utilisateur=request.user)
-        except Enseignant.DoesNotExist:
-            return Response(
-                {'error': 'Seuls les enseignants peuvent créer des cours'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        
-        # Générer un code unique si non fourni
-        code = serializer.validated_data.get('code')
-        if not code:
-            code = f"COURS-{uuid.uuid4().hex[:8].upper()}"
-            while Cours.objects.filter(code=code).exists():
-                code = f"COURS-{uuid.uuid4().hex[:8].upper()}"
-        
-        # Créer le cours
-        cours = serializer.save(enseignant=enseignant, code=code)
-        
-        # Retourner avec serializer détaillé
-        output_serializer = CoursDetailSerializer(cours, context={'request': request})
-        
-        return Response({
-            'message': 'Cours créé avec succès',
-            'cours': output_serializer.data
-        }, status=status.HTTP_201_CREATED)
+        """POST /api/v1/cours/ - Création manuelle (Deprecated / Upload Only?)"""
+        # La création passe normalement par l'upload de fichier qui crée le cours.
+        # Mais si on veut créer un cours vide:
+        return Response({'message': 'Veuillez utiliser l\'upload de fichier pour créer un cours.'}, status=status.HTTP_400_BAD_REQUEST)
     
     def retrieve(self, request, *args, **kwargs):
         """GET /api/v1/cours/{id}/ - Détail d'un cours"""
@@ -220,60 +182,7 @@ class CoursViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
-    # SUPPRIMER la méthode mes_cours du ViewSet (on la garde dans views_auth.py)
-    # pour éviter les conflits d'URLs
-    
-    @action(detail=True, methods=['post'])
-    def inscrire(self, request, pk=None):
-        """POST /api/v1/cours/{id}/inscrire/ - S'inscrire"""
-        cours = self.get_object()
-        
-        try:
-            etudiant = Etudiant.objects.get(utilisateur=request.user)
-        except Etudiant.DoesNotExist:
-            return Response(
-                {'error': 'Seuls les étudiants peuvent s\'inscrire à un cours'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        if is_etudiant_inscrit(cours, etudiant):
-            return Response(
-                {'error': 'Vous êtes déjà inscrit à ce cours'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        add_etudiant_to_cours(cours, etudiant)
-        
-        return Response({
-            'message': 'Inscription réussie',
-            'cours_id': str(cours.pk),
-            'cours_titre': cours.titre
-        })
-    
-    @action(detail=True, methods=['post'])
-    def desinscrire(self, request, pk=None):
-        """POST /api/v1/cours/{id}/desinscrire/ - Se désinscrire"""
-        cours = self.get_object()
-        
-        try:
-            etudiant = Etudiant.objects.get(utilisateur=request.user)
-        except Etudiant.DoesNotExist:
-            return Response(
-                {'error': 'Seuls les étudiants peuvent se désinscrire'},
-                status=status.HTTP_403_FORBIDDEN
-            )
-        
-        if not is_etudiant_inscrit(cours, etudiant):
-            return Response(
-                {'error': 'Vous n\'êtes pas inscrit à ce cours'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-        
-        remove_etudiant_from_cours(cours, etudiant)
-        
-        return Response({
-            'message': 'Désinscription réussie'
-        })
+    # Inscription/Désinscription supprimées car gérées par MatièreView
     
     @action(detail=True, methods=['get'])
     def etudiants(self, request, pk=None):
@@ -390,7 +299,7 @@ class CoursViewSet(viewsets.ModelViewSet):
         serializer = RessourceSerializer(ressources, many=True, context={'request': request})
         return Response(serializer.data)
 
-    @action(detail=True, methods=['post'], parser_classes=[MultiPartParser, FormParser])
+    @action(detail=True, methods=['post'], parser_classes=[MultiPartParser, FormParser], url_path='upload-resource')
     def upload_resource(self, request, pk=None):
         """POST /api/v1/cours/{id}/upload-resource/ - Pousser une image/ressource"""
         cours = self.get_object()
@@ -448,7 +357,7 @@ class CoursViewSet(viewsets.ModelViewSet):
         
         return Response(stats)
 
-    @action(detail=True, methods=['post'])
+    @action(detail=True, methods=['post'], url_path='consulter-granule')
     def consulter_granule(self, request, pk=None):
         """POST /api/v1/cours/{id}/consulter-granule/ - Marquer un granulé comme consulté"""
         cours = self.get_object()
@@ -483,87 +392,3 @@ class CoursViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-
-# ============================================================================
-# VIEWSET EXERCICES
-# ============================================================================
-
-class ExerciceViewSet(viewsets.ModelViewSet):
-    """
-    ViewSet pour gérer les exercices et leur génération par IA
-    """
-    queryset = Exercice.objects.all()
-    serializer_class = ExerciceSerializer
-    permission_classes = [IsAuthenticated]
-
-    @action(detail=False, methods=['post'])
-    def generate(self, request):
-        """
-        POST /api/v1/exercices/generate/
-        Génère des exercices à partir d'un granule.
-        """
-        granule_id = request.data.get('granule_id')
-        type_question = request.data.get('type_question', 'QCM')
-        count = int(request.data.get('count', 3))
-        
-        if not granule_id:
-            return Response({'error': 'granule_id est requis'}, status=status.HTTP_400_BAD_REQUEST)
-            
-        try:
-            granule = Granule.objects.get(pk=granule_id)
-            # Re-dérivation du cours via la hiérarchie
-            cours = granule.sous_section.section.chapitre.partie.cours
-            
-            # 1. Récupérer le contenu réel du granule (MongoDB)
-            from .json_utils import get_granule_content
-            content_data = get_granule_content(granule.mongo_contenu_id)
-            text_content = content_data.get('html_content', '') if isinstance(content_data, dict) else str(content_data)
-            
-            # Nettoyage HTML si nécessaire pour le prompt
-            from bs4 import BeautifulSoup
-            soup = BeautifulSoup(text_content, 'html.parser')
-            clean_text = soup.get_text()
-            
-            # 2. Appeler le service d'IA
-            print(f"🤖 Génération d'exercices IA pour le granule {granule.titre}...")
-            from .ai_service import generate_exercises_from_granule
-            questions_data = generate_exercises_from_granule(clean_text, type_question, count)
-            
-            # 3. Créer l'Exercice et les Questions/Réponses en base
-            from django.db import transaction
-            with transaction.atomic():
-                exercice = Exercice.objects.create(
-                    titre=request.data.get('titre', f"Exercice : {granule.titre}"),
-                    description=request.data.get('description', f"Généré automatiquement à partir de : {granule.titre}"),
-                    granule=granule,
-                    cours=cours,
-                    difficulte=int(request.data.get('difficulte', 1))
-                )
-                
-                for i, q_item in enumerate(questions_data):
-                    question = Question.objects.create(
-                        exercice=exercice,
-                        enonce=q_item.get('enonce'),
-                        type_question=type_question,
-                        point=1.0,
-                        ordre=i
-                    )
-                    
-                    for r_item in q_item.get('reponses', []):
-                        Reponse.objects.create(
-                            question=question,
-                            texte=r_item.get('texte'),
-                            est_correcte=r_item.get('est_correcte', False),
-                            feedback=r_item.get('feedback', '')
-                        )
-            
-            serializer = self.get_serializer(exercice)
-            return Response({
-                'message': 'Exercices générés avec succès',
-                'exercice': serializer.data
-            }, status=status.HTTP_201_CREATED)
-            
-        except Granule.DoesNotExist:
-            return Response({'error': 'Granule non trouvé'}, status=status.HTTP_404_NOT_FOUND)
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -351,8 +351,8 @@ def mes_cours_view(request):
     except Enseignant.DoesNotExist:
         try:
             etudiant = Etudiant.objects.get(utilisateur=request.user)
-            # Récupérer les cours auxquels l'étudiant est inscrit
-            cours = etudiant.cours_suivis.all().order_by('-date_creation')
+            # Récupérer les cours auxquels l'étudiant est inscrit (via les matières)
+            cours = Cours.objects.filter(matiere__etudiants_inscrits=etudiant).order_by('-date_creation')
             role = 'etudiant'
         except Etudiant.DoesNotExist:
             cours = Cours.objects.none()

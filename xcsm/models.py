@@ -109,6 +109,9 @@ class FichierSource(models.Model):
         default='EN_ATTENTE'
     )
     
+    # NOUVEAU: Lien vers la matière (pour savoir où créer le cours après traitement)
+    matiere = models.ForeignKey('Matiere', on_delete=models.CASCADE, related_name="fichiers", null=True, blank=True)
+    
     date_upload = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
@@ -133,26 +136,56 @@ class Ressource(models.Model):
         return self.titre
 
 # ==============================================================================
-# 3. BLOC STRUCTURE PÉDAGOGIQUE (Inchangé, c'est le squelette)
+# 3. BLOC STRUCTURE PÉDAGOGIQUE
 # ==============================================================================
 
-class Cours(models.Model):
+class Matiere(models.Model):
+    """
+    [NOUVEAU] Conteneur principal des cours.
+    L'étudiant s'inscrit ici via un CODE.
+    """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    titre = models.CharField(max_length=200, verbose_name="Nom de la matière")
+    code = models.CharField(max_length=50, unique=True, verbose_name="Code d'accès (défini par l'enseignant)")
+    description = models.TextField(blank=True)
+    image = models.ImageField(upload_to='matieres_images/', null=True, blank=True)
+    
+    enseignant = models.ForeignKey(Enseignant, on_delete=models.CASCADE, related_name="mes_matieres")
+    
+    # Inscriptions : L'étudiant s'inscrit à la MATIÈRE, pas au cours individuel
+    etudiants_inscrits = models.ManyToManyField(
+        'Etudiant', 
+        related_name='matieres_suivies', 
+        blank=True,
+        verbose_name="Étudiants inscrits"
+    )
+    
+    date_creation = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.titre} ({self.matiere.code if self.matiere else 'Sans Matière'})"
+
+
+class Cours(models.Model):
+    """
+    Représente un Document traité (PDF/DOCX) devenu un Cours structuré.
+    Doit appartenir à une Matière.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    # Lien Parent Obligatoire (Temporairement nullable pour migration)
+    matiere = models.ForeignKey(Matiere, on_delete=models.CASCADE, related_name="cours_associes", null=True, blank=True)
+    
+    # On garde l'enseignant pour accès direct facile, même si accessible via matiere
     enseignant = models.ForeignKey(Enseignant, on_delete=models.CASCADE, related_name="mes_cours")
+    
     titre = models.CharField(max_length=200)
-    code = models.CharField(max_length=20, unique=True)
     description = models.TextField(blank=True)
     image = models.ImageField(upload_to='cours_images/', null=True, blank=True)
     est_publie = models.BooleanField(default=False)
     date_creation = models.DateTimeField(auto_now_add=True)
 
-    # Relation avec les étudiants
-    etudiants_inscrits = models.ManyToManyField(
-        'Etudiant', 
-        related_name='cours_suivis', 
-        blank=True,
-        verbose_name="Étudiants inscrits"
-    )
+    # Note: On supprime 'etudiants_inscrits' et 'code' ici car gérés par Matière désormais
 
     def __str__(self):
         return self.titre

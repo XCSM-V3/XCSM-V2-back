@@ -161,9 +161,9 @@ class FichierSourceAdmin(admin.ModelAdmin):
 # ==============================================================================
 
 class CoursAdmin(admin.ModelAdmin):
-    list_display = ('code', 'titre', 'enseignant', 'est_publie', 'date_creation', 'nb_parties')
+    list_display = ('titre', 'enseignant', 'est_publie', 'date_creation', 'nb_parties')
     list_filter = ('est_publie', 'date_creation')
-    search_fields = ('titre', 'code')
+    search_fields = ('titre', )
     
     def nb_parties(self, obj):
         return obj.parties.count()

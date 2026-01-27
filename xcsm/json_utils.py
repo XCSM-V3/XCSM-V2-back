@@ -73,7 +73,7 @@ def get_cours_complete_structure(cours):
     structure = {
         "cours": {
             "id": str(cours.id),
-            "code": cours.code,
+            "code": cours.matiere.code if cours.matiere else "N/A",
             "titre": cours.titre,
             "description": cours.description,
             "enseignant": cours.enseignant.utilisateur.username

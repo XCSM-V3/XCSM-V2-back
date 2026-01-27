@@ -52,15 +52,28 @@ from .views_auth import (
 )
 
 # Import du ViewSet Cours
-from .views_cours import CoursViewSet, ExerciceViewSet
+from .views_cours import CoursViewSet
+
+# Import des vues de matières
+from .views_matiere import (
+    MatiereListCreateView, MatiereDetailView, JoinMatiereView
+)
 
 # Configuration du router pour les ViewSets
 router = DefaultRouter()
 router.register(r'cours', CoursViewSet, basename='cours')
-router.register(r'exercices', ExerciceViewSet, basename='exercices')
+
 
 # Configuration des URLs
 urlpatterns = [
+    # =========================================================================
+    # MATIERES
+    # =========================================================================
+    path('matieres/', MatiereListCreateView.as_view(), name='matiere-list'),
+    path('matieres/<uuid:pk>/', MatiereDetailView.as_view(), name='matiere-detail'),
+    path('matieres/join/', JoinMatiereView.as_view(), name='join-matiere'),
+
+    # ANCIENS BULK (A nettoyer plus tard si besoin)
     # =========================================================================
     # AUTHENTIFICATION
     # =========================================================================

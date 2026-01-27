@@ -291,6 +291,7 @@
 
 # xcsm/processing.py - Version JSON Structuré (Refonte Complète)
 import fitz  # PyMuPDF
+import unicodedata
 import os
 import re
 import mammoth
@@ -363,9 +364,34 @@ def extract_structure_from_pdf(file_path):
         for b in blocks:
             if "lines" not in b: continue
             
+
             for l in b["lines"]:
                 # Reconstruction de la ligne (qui peut avoir plusieurs styles)
-                line_text = "".join([s["text"] for s in l["spans"]]).strip()
+                raw_text = "".join([s["text"] for s in l["spans"]]).strip()
+                
+                try:
+                    # Regex pour intervertir : [Espace éventuel][Accent combinant OU espacé][Espace éventuel][Lettre]
+                    # Inclut U+00B4 (Acute), U+0060 (Grave), U+005E (Circumflex), U+00A8 (Diaeresis)
+                    pattern = r"(\s*)([\u0300-\u036f\u00B4\u0060\^¨])(\s*)([a-zA-Z])"
+                    
+                    def accent_replacer(match):
+                        accent = match.group(2)
+                        letter = match.group(4)
+                        # Map accents espacés vers accent combinants pour que NFKC fonctionne
+                        charmap = {
+                            '\u00B4': '\u0301', # Acute
+                            '\u0060': '\u0300', # Grave
+                            '^': '\u0302',      # Circumflex
+                            '¨': '\u0308'       # Diaeresis
+                        }
+                        combining = charmap.get(accent, accent)
+                        return letter + combining
+
+                    fixed_text = re.sub(pattern, accent_replacer, raw_text)
+                    line_text = unicodedata.normalize('NFKC', fixed_text)
+                except Exception:
+                    line_text = unicodedata.normalize('NFKC', raw_text)
+
                 if not line_text: continue
                 
                 # On prend le style du premier span significatif pour classifier la ligne
@@ -412,8 +438,21 @@ def extract_structure_from_pdf(file_path):
     return parse_html_to_json_structure(f"<html><body>{html_parts}</body></html>")
 def extract_structure_from_txt(file_path):
     """ TXT -> JSON Structure (Simple) """
-    with open(file_path, 'r', encoding='utf-8') as f:
-        text = f.read()
+    # Tentative 1: UTF-8 avec BOM (utf-8-sig) ou sans
+    try:
+        with open(file_path, 'r', encoding='utf-8-sig') as f:
+            text = f.read()
+    except UnicodeDecodeError:
+        # Tentative 2: CP1252 (Windows Western Europe)
+        print(f"⚠️ Échec lecture UTF-8 pour {file_path}, tentative CP1252...")
+        try:
+             with open(file_path, 'r', encoding='cp1252') as f:
+                text = f.read()
+        except UnicodeDecodeError:
+            # Tentative 3: Latin-1 (Fallback ultime, ne plante jamais mais peut mal interpréter)
+            print(f"⚠️ Échec lecture CP1252, tentative Latin-1...")
+            with open(file_path, 'r', encoding='latin-1') as f:
+                text = f.read()
     
     html_parts = ""
     # Heuristique simple pour le TXT
@@ -556,36 +595,34 @@ def split_and_create_granules(fichier_source, json_structure, target_course_id=N
     Granule.objects.filter(fichier_source=fichier_source).delete()
     
     # B. RÉCUPÉRATION / CRÉATION DU COURS
-    if target_course_id:
-        try:
-            cours = Cours.objects.get(id=target_course_id)
-            # On met éventuellement à jour le titre si c'est un placeholder
-            if "Document sans titre" in cours.titre and fichier_source.titre:
-                 cours.titre = fichier_source.titre
-                 cours.save()
-        except Cours.DoesNotExist:
-            print(f"⚠️ Cours cible {target_course_id} introuvable, fallback sur création auto.")
-            code_unique = f"C-{fichier_source.id.hex[:6].upper()}"
-            cours, _ = Cours.objects.get_or_create(
-                code=code_unique,
-                defaults={
-                    'enseignant': fichier_source.enseignant,
-                    'titre': fichier_source.titre,
-                    'description': "Généré automatiquement - Version JSON",
-                    'est_publie': False
-                }
-            )
+    # Le cours est désormais attaché à la MATIÈRE du fichier
+    
+    if not fichier_source.matiere:
+        print(f"⚠️ Fichier {fichier_source.id} sans matière parente. Création orpheline impossible.")
+        # Fallback temporaire ou erreur ? 
+        # Pour l'instant on raise une erreur car la matière est obligatoire dans la nouvelle logique
+        raise ValueError("Impossible de traiter un fichier sans matière associée.")
+
+    matiere = fichier_source.matiere
+    
+    # On cherche s'il existe déjà un cours pour ce fichier dans cette matière
+    # Ou logique simplifiée : Un fichier = Un cours ?
+    # Oui, "La vcreation d'un cours exige l'upload d'unn document qui sera le document de ce cours"
+    
+    cours, created = Cours.objects.get_or_create(
+        matiere=matiere,
+        titre=fichier_source.titre,
+        defaults={
+            'enseignant': fichier_source.enseignant,
+            'description': f"Cours généré depuis {fichier_source.titre}",
+            'est_publie': False
+        }
+    )
+    
+    if created:
+        print(f"✅ Nouveau cours créé : {cours.titre} dans {matiere.titre}")
     else:
-        code_unique = f"C-{fichier_source.id.hex[:6].upper()}"
-        cours, _ = Cours.objects.get_or_create(
-            code=code_unique,
-            defaults={
-                'enseignant': fichier_source.enseignant,
-                'titre': fichier_source.titre,
-                'description': "Généré automatiquement - Version JSON",
-                'est_publie': False
-            }
-        )
+        print(f"♻️ Mise à jour du cours existant : {cours.titre}")
     
     # Nettoyage des anciennes parties
     Partie.objects.filter(cours=cours).delete()
@@ -833,7 +870,7 @@ def process_and_store_document(fichier_source_instance):
             fichier_source_instance.save()
         
         print(f"✅ Traitement terminé avec succès")
-        return True, f"Cours généré : {cours.titre} ({cours.code})"
+        return True, f"Cours généré : {cours.titre}"
         
     except Exception as e:
         import traceback

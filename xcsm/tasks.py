@@ -12,6 +12,7 @@ Tâches principales:
 """
 
 from celery import shared_task
+from celery.result import allow_join_result
 from .models import FichierSource
 from .processing import (
     extract_structure_from_pdf,
@@ -32,7 +33,7 @@ logger = logging.getLogger(__name__)
 # ==============================================================================
 
 @shared_task(bind=True, max_retries=3)
-def process_document_async(self, fichier_id):
+def process_document_task(self, fichier_id):
     """
     Tâche principale pour traiter un document uploadé de manière asynchrone.
     
@@ -60,11 +61,11 @@ def process_document_async(self, fichier_id):
             fichier.statut_traitement = 'EN_COURS'
             fichier.save()
             
-            logger.info(f"📄 [Task {self.request.id}] Fichier: {fichier.titre} (Type: {fichier.type_mime})")
-            
             # Détermination du type de fichier
             file_path = fichier.fichier_original.path
             ext = file_path.split('.')[-1].lower()
+
+            logger.info(f"📄 [Task {self.request.id}] Fichier: {fichier.titre} (Type: {ext})")
             
             # ÉTAPE 2: Extraction d'images (PDF uniquement, non-bloquant)
             if ext == 'pdf':
@@ -73,7 +74,7 @@ def process_document_async(self, fichier_id):
                     extract_images_from_pdf_task.delay(fichier_id)
                 except Exception as img_error:
                     logger.warning(f"⚠️ [Task {self.request.id}] Échec extraction images (non-bloquant): {img_error}")
-            
+
             # ÉTAPE 3: Extraction de texte
             logger.info(f"📝 [Task {self.request.id}] Extraction de texte...")
             extraction_result = extract_text_from_document_task.apply_async(
@@ -81,12 +82,14 @@ def process_document_async(self, fichier_id):
                 retry=True,
                 retry_policy={
                     'max_retries': 3,
-                'interval_start': 60,
-                'interval_step': 60,
-                'interval_max': 600,
-            }
-        )
-            json_structure = extraction_result.get(timeout=300)  # 5 minutes max
+                    'interval_start': 60,
+                    'interval_step': 60,
+                    'interval_max': 600,
+                }
+            )
+            
+            with allow_join_result():
+                json_structure = extraction_result.get(timeout=300)  # 5 minutes max
             
             if not json_structure:
                 raise ValueError("Extraction de texte a retourné une structure vide")
@@ -103,7 +106,9 @@ def process_document_async(self, fichier_id):
                     'interval_max': 600,
                 }
             )
-            cours_info = granules_result.get(timeout=600)  # 10 minutes max
+            
+            with allow_join_result():
+                cours_info = granules_result.get(timeout=600)  # 10 minutes max
             
             # ÉTAPE 5: Finalisation
             fichier.statut_traitement = 'TRAITE'
@@ -273,17 +278,17 @@ def generate_granules_task(self, fichier_id, json_structure):
             
             # Enregistrer les résultats
             granule_log.set_result({
-                'cours_id': cours.id,
-                'cours_code': cours.code,
+                'cours_id': str(cours.id),
+                'cours_code': cours.matiere.code if cours.matiere else "N/A",
                 'granules_count': granules_count
             })
             
             logger.info(f"✅ [Granule Task {self.request.id}] Génération réussie: {granules_count} granules créés")
             
             return {
-                "cours_id": cours.id,
+                "cours_id": str(cours.id),
                 "cours_titre": cours.titre,
-            "cours_code": cours.code,
+            "cours_code": cours.matiere.code if cours.matiere else "N/A",
             "granules_count": granules_count
         }
         
