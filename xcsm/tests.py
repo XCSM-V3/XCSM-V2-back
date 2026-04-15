@@ -1,12 +1,3 @@
-# from django.test import TestCase
-
-# # Create your tests here.
-
-
-
-
-
-
 # xcsm/tests.py - Tests pour la version JSON
 from django.test import TestCase
 from django.core.files.uploadedfile import SimpleUploadedFile
