@@ -16,8 +16,18 @@ def get_mongo_db():
     if _mongo_db is not None:
         return _mongo_db
 
-    # Récupération de l'URI
-    mongo_uri = os.getenv('MONGO_URI', 'mongodb://localhost:27017/')
+    # Récupération de l'URI — priorité à MONGO_URI, sinon construction depuis les variables individuelles
+    mongo_host = os.getenv('MONGO_HOST', 'localhost')
+    mongo_port = os.getenv('MONGO_PORT', '27017')
+    mongo_user = os.getenv('MONGO_USER', '')
+    mongo_password = os.getenv('MONGO_PASSWORD', '')
+
+    if mongo_user and mongo_password:
+        default_uri = f"mongodb://{mongo_user}:{mongo_password}@{mongo_host}:{mongo_port}/"
+    else:
+        default_uri = f"mongodb://{mongo_host}:{mongo_port}/"
+
+    mongo_uri = os.getenv('MONGO_URI', default_uri)
     
     # Nettoyage
     if mongo_uri:
