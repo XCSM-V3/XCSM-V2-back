@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # ==============================================================================
   # BASE DE DONNÉES
@@ -14,7 +12,7 @@ services:
       MYSQL_USER: ${DB_USER:-xcsm_user}
       MYSQL_PASSWORD: ${DB_PASSWORD:-Xcsm@Password2025!}
     ports:
-      - "3306:3306"
+      - "3600:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     networks:
@@ -103,6 +101,7 @@ services:
     restart: unless-stopped
     command: >
       sh -c "python manage.py migrate &&
+             mkdir -p /app/staticfiles &&
              python manage.py collectstatic --noinput &&
              gunicorn --bind 0.0.0.0:8000 --workers 4 --timeout 300 xcsm_project.wsgi:application"
 
@@ -148,7 +147,7 @@ services:
     image: prom/prometheus:latest
     container_name: xcsm_prometheus
     ports:
-      - "9090:9090"
+      - "19090:9090"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus_data:/prometheus
@@ -204,10 +203,15 @@ services:
   mysql-exporter:
     image: prom/mysqld-exporter:latest
     container_name: xcsm_mysql_exporter
-    environment:
-      - DATA_SOURCE_NAME=${DB_USER:-xcsm_user}:${DB_PASSWORD:-Xcsm@Password2025!}@(mysql:3306)/${DB_NAME:-xcsm_db}
+    command:
+      - "--config.my-cnf=/etc/mysql/.my.cnf"
+      - "--collect.global_status"
+      - "--collect.info_schema.innodb_metrics"
+      - "--no-collect.slave_status"
+    volumes:
+      - ./monitoring/mysql/.my.cnf:/etc/mysql/.my.cnf:ro
     ports:
-      - "9104:9104"
+      - "19104:9104"
     depends_on:
       - mysql
     networks:
