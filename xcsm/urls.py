@@ -3,6 +3,9 @@ Configuration complète des endpoints XCSM - VERSION CORRIGÉE
 """
 
 from django.urls import path, include
+
+
+from .views_commentaires import CommentaireViewSet, NotificationViewSet
 from rest_framework.routers import DefaultRouter
 
 # Import des vues existantes
@@ -62,6 +65,9 @@ from .views_matiere import (
 # Configuration du router pour les ViewSets
 router = DefaultRouter()
 router.register(r'cours', CoursViewSet, basename='cours')
+
+router.register(r'comments', CommentaireViewSet, basename='comments')
+router.register(r'notifications', NotificationViewSet, basename='notifications')
 
 
 # Configuration des URLs

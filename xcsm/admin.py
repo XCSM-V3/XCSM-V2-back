@@ -7,8 +7,30 @@ from .models import Utilisateur, Enseignant, Etudiant, Administrateur, FichierSo
 from .models import Cours, Partie, Chapitre, Section, SousSection, Granule
 from .utils import get_mongo_db
 
+from .models import Commentaire, Notification
+
+
 # Import tracking admin to register tracking models
 from .admin_tracking import *
+
+
+
+
+
+
+@admin.register(Commentaire)
+class CommentaireAdmin(admin.ModelAdmin):
+    list_display = ('id', 'auteur', 'type_commentaire', 'statut', 'created_at', 'is_pinned')
+    list_filter = ('type_commentaire', 'statut', 'is_pinned')
+    search_fields = ('contenu', 'auteur__username')
+
+@admin.register(Notification)
+class NotificationAdmin(admin.ModelAdmin):
+    list_display = ('id', 'destinataire', 'type_notif', 'is_read', 'created_at')
+    list_filter = ('type_notif', 'is_read')
+
+
+
 
 
 # ==============================================================================
