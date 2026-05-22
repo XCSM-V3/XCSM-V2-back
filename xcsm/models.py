@@ -323,6 +323,12 @@ class Notification(models.Model):
 
 
 
+# ==============================================================================
+# IMPORT DES MODÈLES DÉPORTÉS (POUR LES MIGRATIONS DJANGO)
+# ==============================================================================
+from .models_tracking import *
+from .models_analytics import *
+
 
 
 

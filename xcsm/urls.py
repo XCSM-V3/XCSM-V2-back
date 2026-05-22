@@ -6,6 +6,9 @@ from django.urls import path, include
 
 
 from .views_commentaires import CommentaireViewSet, NotificationViewSet
+
+from .views_analytics import AnalyticsViewSet
+
 from rest_framework.routers import DefaultRouter
 
 # Import des vues existantes
@@ -68,6 +71,8 @@ router.register(r'cours', CoursViewSet, basename='cours')
 
 router.register(r'comments', CommentaireViewSet, basename='comments')
 router.register(r'notifications', NotificationViewSet, basename='notifications')
+
+router.register(r'analytics', AnalyticsViewSet, basename='analytics')
 
 
 # Configuration des URLs

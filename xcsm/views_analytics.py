@@ -1,0 +1,106 @@
+# Author: Dilane PAFE
+# Fichier: xcsm/views_analytics.py - API pour le Dashboard Enseignant
+
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from .models import Cours
+from .models_analytics import TrackingSession
+from .services_analytics import calculate_course_analytics
+
+class AnalyticsViewSet(viewsets.ViewSet):
+    """
+    Gère les routes /api/v1/analytics/ appelées par useAnalytics.ts
+    """
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=False, methods=['get'], url_path='dashboard')
+    def get_dashboard(self, request):
+        """
+        GET /api/v1/analytics/dashboard?course_id=123
+        Renvoie les métriques globales pour le tableau de bord de l'enseignant.
+        """
+        course_id = request.query_params.get('course_id')
+        if not course_id:
+            return Response({"error": "course_id est requis"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            cours = Cours.objects.get(id=course_id)
+            
+            # Vérification (seul le propriétaire ou admin)
+            if not request.user.is_staff and cours.enseignant.utilisateur != request.user:
+                return Response({"error": "Non autorisé"}, status=status.HTTP_403_FORBIDDEN)
+
+            data = calculate_course_analytics(cours)
+            return Response(data)
+
+        except Cours.DoesNotExist:
+            return Response({"error": "Cours non trouvé"}, status=status.HTTP_404_NOT_FOUND)
+
+
+    @action(detail=False, methods=['post'], url_path='track')
+    def track_session(self, request):
+        """
+        POST /api/v1/analytics/track
+        Appelé par le FrontEnd (côté étudiant) pour enregistrer le temps passé sur un granule.
+        """
+        data = request.data
+        try:
+            from .models import Etudiant, Granule
+            etudiant = Etudiant.objects.get(utilisateur=request.user)
+            cours = Cours.objects.get(id=data.get('course_id'))
+            granule = Granule.objects.get(id=data.get('granule_id'))
+            
+            TrackingSession.objects.create(
+                etudiant=etudiant,
+                cours=cours,
+                granule=granule,
+                time_spent_seconds=data.get('time_spent', 0),
+                success_rate=data.get('success_rate', None)
+            )
+            return Response({"success": True}, status=status.HTTP_201_CREATED)
+            
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+    @action(detail=False, methods=['post'], url_path='synthesis')
+    def generate_synthesis(self, request):
+        """
+        POST /api/v1/analytics/synthesis
+        Utilise Gemini pour générer un résumé textuel à partir des métriques.
+        """
+        course_id = request.data.get('course_id')
+        if not course_id:
+            return Response({"error": "course_id est requis"}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            cours = Cours.objects.get(id=course_id)
+            metrics = calculate_course_analytics(cours)
+            
+            # Appel au Chef d'Orchestre IA (Gemini)
+            from .ai_service import setup_gemini
+            model = setup_gemini()
+            
+            if not model:
+                return Response({"synthesis": "Synthèse indisponible (API non configurée)."})
+
+            prompt = f"""
+            Tu es un conseiller pédagogique. Analyse ces statistiques d'un cours en ligne nommé "{cours.titre}" :
+            - Étudiants inscrits : {metrics['overview']['totalStudents']}
+            - Taux d'achèvement moyen : {metrics['overview']['averageCompletion']}%
+            - Étudiants à risque de décrochage : {metrics['overview']['atRiskStudents']}
+            - Zones de difficultés identifiées : {', '.join([z['concept'] for z in metrics['difficultyZones']])}
+            
+            Rédige un court rapport (3 paragraphes) pour l'enseignant. 
+            1. Fais un bilan positif global.
+            2. Souligne les points d'attention (les zones de difficulté).
+            3. Donne une recommandation actionnable pour aider les étudiants à risque.
+            """
+            
+            response = model.generate_content(prompt)
+            return Response({"synthesis": response.text})
+
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
