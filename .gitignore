@@ -1,3 +1,36 @@
-env/
+# Environnements virtuels
 venv/
+ENV/
+env/
 
+# Fichiers Python compilés
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Fichiers de logs
+*.log
+
+# Bases de données locales
+db.sqlite3
+
+# Fichiers de migration (optionnel si tu veux les régénérer)
+*/migrations/__pycache__/
+*/migrations/*.py
+
+# Fichiers statiques générés
+staticfiles/
+media/
+
+# Configurations locales
+*.env
+.env.*
+
+# Outils divers
+.coverage
+*.pot
+*.mo
+
+# IDE / éditeurs
+.vscode/
+.idea/

@@ -125,14 +125,25 @@ import dj_database_url
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASES = {
-    'default': dj_database_url.config(
-        # En local, on garde MySQL par défaut si DATABASE_URL n'est pas défini
-        default=f"mysql://{os.getenv('DB_USER', 'xcsm_user')}:{os.getenv('DB_PASSWORD', 'Xcsm@Password2025!')}@{os.getenv('DB_HOST', 'localhost')}:{os.getenv('DB_PORT', '3306')}/{os.getenv('DB_NAME', 'xcsm_db')}",
-        conn_max_age=600,
-        conn_health_checks=True,
-    )
-}
+_db_engine = os.getenv('DB_ENGINE', 'django.db.backends.mysql')
+
+if _db_engine == 'django.db.backends.sqlite3':
+    # Mode SQLite pour développement local (aucun serveur requis)
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / os.getenv('DB_NAME', 'db.sqlite3'),
+        }
+    }
+else:
+    # Mode MySQL/PostgreSQL (Docker ou production)
+    DATABASES = {
+        'default': dj_database_url.config(
+            default=f"mysql://{os.getenv('DB_USER', 'xcsm_user')}:{os.getenv('DB_PASSWORD', 'Xcsm@Password2025!')}@{os.getenv('DB_HOST', 'localhost')}:{os.getenv('DB_PORT', '3306')}/{os.getenv('DB_NAME', 'xcsm_db')}",
+            conn_max_age=600,
+            conn_health_checks=True,
+        )
+    }
 
 # CSRF & CORS Settings pour la Production
 # Important pour que Vercel puisse parler à Render

@@ -12,6 +12,8 @@ from .models import (
     FichierSource, Granule, Exercice, Question, Reponse, Progression, Ressource
 )
 
+from .models import Commentaire, Notification, Utilisateur
+
 
 # ============================================================================
 # SERIALIZERS UTILISATEURS & PROFILS
@@ -405,3 +407,109 @@ class ProgressionSerializer(serializers.ModelSerializer):
         model = Progression
         fields = ['id', 'etudiant', 'cours', 'granule', 'date_consultation']
         read_only_fields = ['id', 'date_consultation']
+
+
+
+
+
+
+
+
+
+class CommentAuthorSerializer(serializers.ModelSerializer):
+    """Mappe l'utilisateur vers l'interface CommentAuthor du FrontEnd"""
+    display_name = serializers.SerializerMethodField()
+    role = serializers.SerializerMethodField()
+    initials = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Utilisateur
+        fields = ['id', 'display_name', 'role', 'initials']
+
+    def get_display_name(self, obj):
+        first = obj.first_name or ""
+        last = obj.last_name or ""
+        last_initial = f"{last[0]}." if last else ""
+        return f"{first} {last_initial}".strip() or obj.username
+
+    def get_role(self, obj):
+        if hasattr(obj, 'profil_enseignant'): return 'enseignant'
+        if obj.is_staff or obj.is_superuser: return 'admin'
+        return 'etudiant'
+
+    def get_initials(self, obj):
+        first = obj.first_name[0].upper() if obj.first_name else ""
+        last = obj.last_name[0].upper() if obj.last_name else ""
+        return f"{first}{last}" or "??"
+
+
+class CommentReplySerializer(serializers.ModelSerializer):
+    """Mappe l'interface CommentReply du FrontEnd"""
+    author = CommentAuthorSerializer(source='auteur', read_only=True)
+    upvotes = serializers.SerializerMethodField()
+    user_has_upvoted = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Commentaire
+        fields = ['id', 'content', 'author', 'created_at', 'upvotes', 'user_has_upvoted']
+
+    def get_upvotes(self, obj):
+        return obj.upvotes.count()
+
+    def get_user_has_upvoted(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated: return False
+        return obj.upvotes.filter(id=request.user.id).exists()
+
+# Field mapping personnalisé pour correspondre aux clés JSON FrontEnd
+class CommentSerializer(serializers.ModelSerializer):
+    """Mappe l'interface principale Comment du FrontEnd"""
+    granule_id = serializers.CharField(source='granule.id', read_only=True)
+    course_id = serializers.CharField(source='cours.id', read_only=True)
+    type = serializers.CharField(source='type_commentaire')
+    content = serializers.CharField(source='contenu')
+    author = CommentAuthorSerializer(source='auteur', read_only=True)
+    status = serializers.CharField(source='statut')
+    
+    upvotes = serializers.SerializerMethodField()
+    downvotes = serializers.SerializerMethodField()
+    user_vote = serializers.SerializerMethodField()
+    
+    replies = serializers.SerializerMethodField()
+    replies_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Commentaire
+        fields = [
+            'id', 'granule_id', 'course_id', 'type', 'content', 'author', 'status',
+            'upvotes', 'downvotes', 'user_vote', 'replies', 'replies_count',
+            'created_at', 'updated_at', 'is_pinned', 'is_resolved'
+        ]
+
+    def get_upvotes(self, obj):
+        return obj.upvotes.count()
+
+    def get_downvotes(self, obj):
+        return obj.downvotes.count()
+
+    def get_user_vote(self, obj):
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated: return None
+        if obj.upvotes.filter(id=request.user.id).exists(): return 'up'
+        if obj.downvotes.filter(id=request.user.id).exists(): return 'down'
+        return None
+
+    def get_replies(self, obj):
+        reponses = obj.reponses_fil.all().order_by('created_at')
+        return CommentReplySerializer(reponses, many=True, context=self.context).data
+
+    def get_replies_count(self, obj):
+        return obj.reponses_fil.count()
+
+
+class NotificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notification
+        fields = ['id', 'type', 'title', 'message', 'link', 'is_read', 'created_at', 'actor_name']
+        
+    type = serializers.CharField(source='type_notif')
