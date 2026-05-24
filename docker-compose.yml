@@ -73,6 +73,7 @@ services:
     environment:
       - DEBUG=${DEBUG:-False}
       - SECRET_KEY=${SECRET_KEY:-django-insecure-change-this}
+      - DB_ENGINE=django.db.backends.mysql
       - DB_NAME=${DB_NAME:-xcsm_db}
       - DB_USER=${DB_USER:-xcsm_user}
       - DB_PASSWORD=${DB_PASSWORD:-Xcsm@Password2025!}
@@ -116,6 +117,7 @@ services:
     environment:
       - DEBUG=${DEBUG:-False}
       - SECRET_KEY=${SECRET_KEY:-django-insecure-change-this}
+      - DB_ENGINE=django.db.backends.mysql
       - DB_NAME=${DB_NAME:-xcsm_db}
       - DB_USER=${DB_USER:-xcsm_user}
       - DB_PASSWORD=${DB_PASSWORD:-Xcsm@Password2025!}
@@ -203,14 +205,20 @@ services:
     image: prom/mysqld-exporter:latest
     container_name: xcsm_mysql_exporter
     environment:
-      - DATA_SOURCE_NAME=${DB_USER:-xcsm_user}:${DB_PASSWORD:-Xcsm@Password2025!}@(mysql:3306)/${DB_NAME:-xcsm_db}
+      - MYSQLD_EXPORTER_DATA_SOURCE_NAME=${DB_USER:-xcsm_user}:${DB_PASSWORD:-Xcsm@Password2025!}@(mysql:3306)/
     ports:
       - "9104:9104"
     depends_on:
-      - mysql
+      mysql:
+        condition: service_healthy
     networks:
       - xcsm_network
     restart: unless-stopped
+    command:
+      - '--mysqld.address=mysql:3306'
+      - '--mysqld.username=${DB_USER:-xcsm_user}'
+      - '--collect.global_status'
+      - '--collect.info_schema.innodb_metrics'
 
 # ==============================================================================
 # VOLUMES PERSISTANTS
