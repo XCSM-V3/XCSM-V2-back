@@ -38,7 +38,8 @@ def get_mongo_db():
             # print(f"🔌 [MONGO] Initialisation de la connexion unique...")
             _mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
         
-        _mongo_db = _mongo_client['xcsm_granules_db']
+        _mongo_db_name = os.getenv('MONGO_DB_NAME', 'xcsm_granules_db')
+        _mongo_db = _mongo_client[_mongo_db_name]
         # print("✅ [MONGO] Connexion établie et mise en cache.")
         return _mongo_db
         

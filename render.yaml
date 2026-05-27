@@ -1,0 +1,89 @@
+# =============================================================================
+# render.yaml — Infrastructure as Code pour XCSM Backend sur Render
+# Déclare : Web Service Django + Worker Celery + PostgreSQL
+# Documentation : https://render.com/docs/infrastructure-as-code
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # 1. API Django (Gunicorn)
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: xcsm-api
+    runtime: python
+    region: frankfurt
+    plan: free
+    buildCommand: "./build.sh"
+    startCommand: "gunicorn xcsm_project.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: DEBUG
+        value: "False"
+      - key: SECRET_KEY
+        generateValue: true            # Render génère une clé sécurisée automatiquement
+      - key: DATABASE_URL
+        fromDatabase:
+          name: xcsm-postgres
+          property: connectionString   # Render injecte l'URL PostgreSQL interne
+      - key: ALLOWED_HOSTS
+        value: ".onrender.com"
+      - key: CSRF_TRUSTED_ORIGINS
+        value: "https://xcsm-frontend-app.vercel.app"
+      - key: CORS_ALLOWED_ORIGINS
+        value: "https://xcsm-frontend-app.vercel.app"
+      - key: MONGO_URI
+        sync: false                    # À renseigner manuellement dans le dashboard Render
+      - key: MONGO_DB_NAME
+        value: "xcsm_granules_db"
+      - key: REDIS_URL
+        sync: false                    # URL Upstash Redis (rediss://...)
+      - key: GEMINI_API_KEY
+        sync: false                    # Clé Google AI Studio — jamais exposée au front
+      - key: SENTRY_DSN
+        sync: false                    # Optionnel — monitoring Sentry
+
+  # ---------------------------------------------------------------------------
+  # 2. Worker Celery (tâches asynchrones : parsing PDF/DOCX + IA Gemini)
+  # ---------------------------------------------------------------------------
+  - type: worker
+    name: xcsm-celery-worker
+    runtime: python
+    region: frankfurt
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "celery -A xcsm_project worker --loglevel=info --concurrency=2"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: DEBUG
+        value: "False"
+      - key: SECRET_KEY
+        fromService:
+          name: xcsm-api
+          type: web
+          envVarKey: SECRET_KEY
+      - key: DATABASE_URL
+        fromDatabase:
+          name: xcsm-postgres
+          property: connectionString
+      - key: MONGO_URI
+        sync: false
+      - key: MONGO_DB_NAME
+        value: "xcsm_granules_db"
+      - key: REDIS_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+
+# ---------------------------------------------------------------------------
+# 3. Base de données PostgreSQL (plan free — 1 Go, expire après 90 jours)
+# ---------------------------------------------------------------------------
+databases:
+  - name: xcsm-postgres
+    region: frankfurt
+    plan: free
+    databaseName: xcsm_db
+    user: xcsm_user

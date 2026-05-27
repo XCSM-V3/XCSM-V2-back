@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
+# =============================================================================
 # build.sh — Script de build Render pour XCSM Backend (Django)
-set -o errexit
+# Exécuté automatiquement par Render avant le démarrage du serveur.
+# =============================================================================
+set -o errexit  # Arrêter immédiatement en cas d'erreur
 
 echo "=== [1/4] Installation des dépendances Python ==="
 pip install --upgrade pip setuptools wheel
