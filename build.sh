@@ -3,7 +3,7 @@
 set -o errexit
 
 echo "=== [1/4] Installation des dépendances Python ==="
-pip install --upgrade pip
+pip install --upgrade pip setuptools wheel
 pip install -r requirements.txt
 
 echo "=== [2/4] Collecte des fichiers statiques (WhiteNoise) ==="
