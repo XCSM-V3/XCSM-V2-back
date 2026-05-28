@@ -152,37 +152,25 @@ class RessourceSerializer(serializers.ModelSerializer):
 class MatiereSerializer(serializers.ModelSerializer):
     """Serializer pour la gestion des matières"""
     enseignant_nom = serializers.SerializerMethodField()
-    enseignants_noms = serializers.SerializerMethodField()
     nb_etudiants = serializers.SerializerMethodField()
     nb_cours = serializers.SerializerMethodField()
     est_inscrit = serializers.SerializerMethodField() # Pour l'étudiant
-    
+
     class Meta:
         model = Matiere
         fields = [
             'id', 'titre', 'code', 'description', 'image', 'date_creation',
-            'enseignant', 'enseignant_nom', 'enseignants', 'enseignants_noms', 'nb_etudiants', 'nb_cours', 'est_inscrit'
+            'enseignant', 'enseignant_nom', 'nb_etudiants', 'nb_cours', 'est_inscrit'
         ]
-        read_only_fields = ['id', 'date_creation', 'enseignant', 'code'] # Code généré ou géré par vue
-        
-    def get_enseignant_nom(self, obj):
-        user = obj.enseignant.utilisateur
-        return f"{user.first_name} {user.last_name}"
+        read_only_fields = ['id', 'date_creation', 'enseignant', 'code']
 
-    def get_enseignants_noms(self, obj):
+    def get_enseignant_nom(self, obj):
         try:
-            noms = []
-            for ens in obj.enseignants.select_related('utilisateur').all():
-                u = ens.utilisateur
-                noms.append(f"{u.first_name} {u.last_name}".strip())
-            # fallback : inclure le owner si la liste est vide
-            if not noms and obj.enseignant_id:
-                u = obj.enseignant.utilisateur
-                noms = [f"{u.first_name} {u.last_name}".strip()]
-            return noms
+            user = obj.enseignant.utilisateur
+            return f"{user.first_name} {user.last_name}".strip() or user.email
         except Exception:
-            return []
-        
+            return "Inconnu"
+
     def get_nb_etudiants(self, obj):
         return obj.etudiants_inscrits.count()
         
