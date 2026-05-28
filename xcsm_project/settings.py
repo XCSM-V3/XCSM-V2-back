@@ -40,7 +40,7 @@ INSTALLED_APPS = [
     
     # Third party apps
     'rest_framework',
-    'drf_yasg',
+    'drf_spectacular',
     'corsheaders',
     'rest_framework_simplejwt',             
     'rest_framework_simplejwt.token_blacklist',  
