@@ -426,81 +426,81 @@ def get_statistics():
 #         return []
 
 
-# def get_cours_complete_structure(cours):
-#     """
-#     Reconstruit la structure JSON complète d'un cours avec tous ses granules.
-#     Utile pour l'export ou l'affichage frontend.
+def get_cours_complete_structure(cours):
+    """
+    Reconstruit la structure JSON complète d'un cours avec tous ses granules.
+    Utile pour l'export ou l'affichage frontend.
 
-#     Args:
-#         cours (Cours): Instance du modèle Cours
+    Args:
+        cours (Cours): Instance du modèle Cours
 
-#     Returns:
-#         dict: Structure hiérarchique complète
-#     """
-#     structure = {
-#         "cours": {
-#             "id": str(cours.id),
-#             "code": cours.matiere.code if cours.matiere else "N/A",
-#             "titre": cours.titre,
-#             "description": cours.description,
-#             "enseignant": cours.enseignant.utilisateur.username
-#         },
-#         "parties": []
-#     }
+    Returns:
+        dict: Structure hiérarchique complète
+    """
+    structure = {
+        "cours": {
+            "id": str(cours.id),
+            "code": cours.matiere.code if cours.matiere else "N/A",
+            "titre": cours.titre,
+            "description": cours.description,
+            "enseignant": cours.enseignant.utilisateur.username
+        },
+        "parties": []
+    }
 
-#     for partie in cours.parties.all():
-#         partie_data = {
-#             "id": str(partie.id),
-#             "titre": partie.titre,
-#             "numero": partie.numero,
-#             "chapitres": []
-#         }
+    for partie in cours.parties.all():
+        partie_data = {
+            "id": str(partie.id),
+            "titre": partie.titre,
+            "numero": partie.numero,
+            "chapitres": []
+        }
 
-#         for chapitre in partie.chapitres.all():
-#             chapitre_data = {
-#                 "id": str(chapitre.id),
-#                 "titre": chapitre.titre,
-#                 "numero": chapitre.numero,
-#                 "sections": []
-#             }
+        for chapitre in partie.chapitres.all():
+            chapitre_data = {
+                "id": str(chapitre.id),
+                "titre": chapitre.titre,
+                "numero": chapitre.numero,
+                "sections": []
+            }
 
-#             for section in chapitre.sections.all():
-#                 section_data = {
-#                     "id": str(section.id),
-#                     "titre": section.titre,
-#                     "numero": section.numero,
-#                     "sous_sections": []
-#                 }
+            for section in chapitre.sections.all():
+                section_data = {
+                    "id": str(section.id),
+                    "titre": section.titre,
+                    "numero": section.numero,
+                    "sous_sections": []
+                }
 
-#                 for sous_section in section.sous_sections.all():
-#                     sous_section_data = {
-#                         "id": str(sous_section.id),
-#                         "titre": sous_section.titre,
-#                         "numero": sous_section.numero,
-#                         "granules": []
-#                     }
+                for sous_section in section.sous_sections.all():
+                    sous_section_data = {
+                        "id": str(sous_section.id),
+                        "titre": sous_section.titre,
+                        "numero": sous_section.numero,
+                        "granules": []
+                    }
 
-#                     for granule in sous_section.granules.all():
-#                         granule_content = get_granule_content(granule.mongo_contenu_id)
+                    for granule in sous_section.granules.all():
+                        granule_content = get_granule_content(granule.mongo_contenu_id)
 
-#                         granule_data = {
-#                             "id": str(granule.id),
-#                             "titre": granule.titre,
-#                             "type": granule.type_contenu,
-#                             "ordre": granule.ordre,
-#                             "contenu": granule_content
-#                         }
-#                         sous_section_data["granules"].append(granule_data)
+                        granule_data = {
+                            "id": str(granule.id),
+                            "titre": granule.titre,
+                            "type": granule.type_contenu,
+                            "ordre": granule.ordre,
+                            "contenu": granule_content
+                        }
+                        sous_section_data["granules"].append(granule_data)
 
-#                     section_data["sous_sections"].append(sous_section_data)
+                    section_data["sous_sections"].append(sous_section_data)
 
-#                 chapitre_data["sections"].append(section_data)
+                chapitre_data["sections"].append(section_data)
 
-#             partie_data["chapitres"].append(chapitre_data)
+            partie_data["chapitres"].append(chapitre_data)
 
-#         structure["parties"].append(partie_data)
+        structure["parties"].append(partie_data)
 
-#     return structure
+    return structure
 
 
 # def get_statistics():
