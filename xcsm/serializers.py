@@ -196,15 +196,38 @@ class MatiereSerializer(serializers.ModelSerializer):
         return False
         
 class MatiereCreateSerializer(serializers.ModelSerializer):
-    """Pour la création : on laisse l'enseignant choisir le code"""
+    """Pour la création : code optionnel — auto-généré si absent ou déjà pris"""
+    code = serializers.CharField(max_length=50, required=False, allow_blank=True)
+
     class Meta:
         model = Matiere
         fields = ['titre', 'code', 'description', 'image']
-        
+
     def validate_code(self, value):
-        if Matiere.objects.filter(code=value).exists():
-            raise serializers.ValidationError("Ce code matière est déjà utilisé.")
-        return value
+        if value and Matiere.objects.filter(code=value.upper()).exists():
+            raise serializers.ValidationError(
+                f"Le code '{value.upper()}' est déjà utilisé. Choisissez un autre code ou laissez le champ vide pour en générer un automatiquement."
+            )
+        return value.upper() if value else value
+
+    def _generate_unique_code(self, titre):
+        """Génère un code unique basé sur le titre + 4 chiffres aléatoires"""
+        import random
+        prefix = ''.join(c for c in titre.upper() if c.isalpha())[:4] or "MAT"
+        for _ in range(20):
+            code = f"{prefix}{random.randint(100, 9999)}"
+            if not Matiere.objects.filter(code=code).exists():
+                return code
+        # Fallback ultime
+        import uuid
+        return str(uuid.uuid4())[:8].upper()
+
+    def create(self, validated_data):
+        if not validated_data.get('code'):
+            validated_data['code'] = self._generate_unique_code(
+                validated_data.get('titre', 'MAT')
+            )
+        return super().create(validated_data)
 
 class CoursListSerializer(serializers.ModelSerializer):
     """Serializer pour la liste des cours (Désormais rattachés à une Matière)"""
