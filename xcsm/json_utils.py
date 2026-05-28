@@ -340,45 +340,45 @@ def get_statistics():
 #     print(f"✅ Cours formaté pour XCCM exporté vers {output_path}")
 
 
-# def search_in_granules(query, fichier_source=None):
-#     """
-#     Recherche dans les contenus des granules MongoDB.
-#     """
-#     try:
-#         mongo_db = get_mongo_db()
+def search_in_granules(query, fichier_source=None):
+    """
+    Recherche dans les contenus des granules MongoDB.
+    """
+    try:
+        mongo_db = get_mongo_db()
         
-#         cleaned_query = re.sub(r'[^\w\s]', ' ', query)
-#         keywords = [re.escape(w) for w in cleaned_query.split() if w.strip()]
+        cleaned_query = re.sub(r'[^\w\s]', ' ', query)
+        keywords = [re.escape(w) for w in cleaned_query.split() if w.strip()]
         
-#         if not keywords:
-#             keywords = [re.escape(query)]
+        if not keywords:
+            keywords = [re.escape(query)]
 
-#         keyword_conditions = []
-#         for word in keywords:
-#             keyword_conditions.append({
-#                 "$or": [
-#                     {"content": {"$regex": word, "$options": "i"}},
-#                     {"html": {"$regex": word, "$options": "i"}}
-#                 ]
-#             })
+        keyword_conditions = []
+        for word in keywords:
+            keyword_conditions.append({
+                "$or": [
+                    {"content": {"$regex": word, "$options": "i"}},
+                    {"html": {"$regex": word, "$options": "i"}}
+                ]
+            })
 
-#         filter_query = {
-#             "$and": keyword_conditions
-#         }
+        filter_query = {
+            "$and": keyword_conditions
+        }
         
-#         if fichier_source:
-#              filter_query["$and"].append({"fichier_source_id": str(fichier_source.id)})
+        if fichier_source:
+             filter_query["$and"].append({"fichier_source_id": str(fichier_source.id)})
         
-#         results = list(mongo_db['granules'].find(filter_query).limit(50))
+        results = list(mongo_db['granules'].find(filter_query).limit(50))
         
-#         for doc in results:
-#             doc['_id'] = str(doc['_id'])
+        for doc in results:
+            doc['_id'] = str(doc['_id'])
         
-#         return results
+        return results
         
-#     except Exception as e:
-#         print(f"❌ Erreur search_in_granules: {e}")
-#         return []
+    except Exception as e:
+        print(f"❌ Erreur search_in_granules: {e}")
+        return []
 
 
 # def search_in_granules_filtered(query, fichier_source_ids):
