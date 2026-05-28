@@ -2,7 +2,7 @@
 # XCSM BACKEND - DEPENDANCES COMPLETES
 # ============================================
 
-# COMPATIBILITY (Python 3.12+ -- pkg_resources needed by drf-yasg)
+# COMPATIBILITY (Python 3.12+ — pkg_resources needed by drf-yasg)
 setuptools>=68.0
 
 # CORE DJANGO & REST API
