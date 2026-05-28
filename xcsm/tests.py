@@ -101,10 +101,19 @@ class DocumentProcessingTestCase(TestCase):
     
     def test_split_and_create_granules(self):
         """Vérifie la création de la hiérarchie depuis JSON."""
+        # Matière requise depuis la migration 0008
+        from .models import Matiere
+        matiere = Matiere.objects.create(
+            enseignant=self.enseignant,
+            titre="Matière Test",
+            code="MAT-TEST-001",
+            description="Matière de test"
+        )
         fichier = FichierSource.objects.create(
             enseignant=self.enseignant,
             titre="Test Hiérarchie",
-            fichier_original=SimpleUploadedFile("test.txt", b"test")
+            fichier_original=SimpleUploadedFile("test.txt", b"test"),
+            matiere=matiere
         )
         
         json_structure = {
@@ -237,11 +246,10 @@ class JsonUtilsTestCase(TestCase):
             departement='Test'
         )
         
-        # Création d'un cours complet
+        # Création d'un cours complet (sans 'code' : supprimé du modèle, porté par Matiere)
         self.cours = Cours.objects.create(
             enseignant=self.enseignant,
             titre="Cours Test Utils",
-            code="TEST-UTILS",
             description="Test"
         )
     
@@ -251,7 +259,8 @@ class JsonUtilsTestCase(TestCase):
         
         self.assertIn('cours', structure)
         self.assertIn('parties', structure)
-        self.assertEqual(structure['cours']['code'], 'TEST-UTILS')
+        # Note: le champ 'code' a été supprimé de Cours (migration 0010), déplacé vers Matiere
+        self.assertEqual(structure['cours']['titre'], 'Cours Test Utils')
     
     def test_statistics(self):
         """Vérifie les statistiques MongoDB."""

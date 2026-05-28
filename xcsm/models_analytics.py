@@ -1,9 +1,10 @@
 # Author: Dilane PAFE
 # Fichier: xcsm/models_analytics.py - Modèles pour le Tracking et l'Analytics
+# NOTE: On utilise des références string ('xcsm.Model') au lieu d'imports directs
+# pour éviter l'import circulaire avec models.py
 
 import uuid
 from django.db import models
-from .models import Etudiant, Cours, Granule, Enseignant
 
 class TrackingSession(models.Model):
     """
@@ -11,9 +12,9 @@ class TrackingSession(models.Model):
     C'est la brique de base pour calculer le temps moyen et identifier les zones de difficulté.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    etudiant = models.ForeignKey(Etudiant, on_delete=models.CASCADE, related_name='sessions_tracking')
-    cours = models.ForeignKey(Cours, on_delete=models.CASCADE, related_name='sessions_tracking_cours')
-    granule = models.ForeignKey(Granule, on_delete=models.CASCADE, related_name='sessions_tracking_granules')
+    etudiant = models.ForeignKey('xcsm.Etudiant', on_delete=models.CASCADE, related_name='sessions_tracking')
+    cours = models.ForeignKey('xcsm.Cours', on_delete=models.CASCADE, related_name='sessions_tracking_cours')
+    granule = models.ForeignKey('xcsm.Granule', on_delete=models.CASCADE, related_name='sessions_tracking_granules')
     
     # Le temps passé en secondes
     time_spent_seconds = models.IntegerField(default=0)
@@ -36,7 +37,7 @@ class CourseAnalyticsSnapshot(models.Model):
     Utile pour générer des graphiques d'évolution dans le temps sans recalculer toute la base.
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    cours = models.ForeignKey(Cours, on_delete=models.CASCADE, related_name='analytics_snapshots')
+    cours = models.ForeignKey('xcsm.Cours', on_delete=models.CASCADE, related_name='analytics_snapshots')
     
     total_students = models.IntegerField(default=0)
     active_students = models.IntegerField(default=0)

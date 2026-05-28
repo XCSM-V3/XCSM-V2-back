@@ -27,12 +27,28 @@ class AnalyticsViewSet(viewsets.ViewSet):
 
         try:
             cours = Cours.objects.get(id=course_id)
+            period_raw = request.query_params.get("period", "7")
+            try:
+                period_days = int(period_raw)
+            except ValueError:
+                period_days = 7
             
-            # Vérification (seul le propriétaire ou admin)
-            if not request.user.is_staff and cours.enseignant.utilisateur != request.user:
+            # Vérification (propriétaire, co-enseignant ou admin)
+            is_owner = False
+            is_co_teacher = False
+            if hasattr(request.user, 'profil_enseignant'):
+                ens = request.user.profil_enseignant
+                is_owner = (cours.enseignant == ens)
+                if cours.matiere:
+                    is_co_teacher = (
+                        cours.matiere.enseignant == ens
+                        or cours.matiere.enseignants.filter(pk=ens.pk).exists()
+                    )
+
+            if not request.user.is_staff and not is_owner and not is_co_teacher:
                 return Response({"error": "Non autorisé"}, status=status.HTTP_403_FORBIDDEN)
 
-            data = calculate_course_analytics(cours)
+            data = calculate_course_analytics(cours, period_days=period_days)
             return Response(data)
 
         except Cours.DoesNotExist:
@@ -77,7 +93,7 @@ class AnalyticsViewSet(viewsets.ViewSet):
 
         try:
             cours = Cours.objects.get(id=course_id)
-            metrics = calculate_course_analytics(cours)
+            metrics = calculate_course_analytics(cours, period_days=7)
             
             # Appel au Chef d'Orchestre IA (Gemini)
             from .ai_service import setup_gemini
@@ -86,18 +102,22 @@ class AnalyticsViewSet(viewsets.ViewSet):
             if not model:
                 return Response({"synthesis": "Synthèse indisponible (API non configurée)."})
 
+            difficulty_titles = ", ".join(
+                [z.get("granule_title") for z in metrics.get("difficult_zones", []) if z.get("granule_title")]
+            ) or "Aucune zone critique détectée"
+
             prompt = f"""
-            Tu es un conseiller pédagogique. Analyse ces statistiques d'un cours en ligne nommé "{cours.titre}" :
-            - Étudiants inscrits : {metrics['overview']['totalStudents']}
-            - Taux d'achèvement moyen : {metrics['overview']['averageCompletion']}%
-            - Étudiants à risque de décrochage : {metrics['overview']['atRiskStudents']}
-            - Zones de difficultés identifiées : {', '.join([z['concept'] for z in metrics['difficultyZones']])}
-            
-            Rédige un court rapport (3 paragraphes) pour l'enseignant. 
-            1. Fais un bilan positif global.
-            2. Souligne les points d'attention (les zones de difficulté).
-            3. Donne une recommandation actionnable pour aider les étudiants à risque.
-            """
+Tu es un conseiller pédagogique. Analyse ces statistiques d'un cours en ligne nommé "{cours.titre}" :
+- Étudiants inscrits : {metrics.get('total_students', 0)}
+- Taux de complétion moyen : {metrics.get('avg_completion_rate', 0)}%
+- Étudiants à risque de décrochage : {metrics.get('at_risk_students', 0)}
+- Zones de difficultés identifiées : {difficulty_titles}
+
+Rédige un court rapport (3 paragraphes) pour l'enseignant.
+1. Fais un bilan positif global.
+2. Souligne les points d'attention (les zones de difficulté).
+3. Donne une recommandation actionnable pour aider les étudiants à risque.
+"""
             
             response = model.generate_content(prompt)
             return Response({"synthesis": response.text})

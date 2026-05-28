@@ -8,9 +8,9 @@ Ce module contient les modèles pour:
 """
 
 from django.db import models
-from django.contrib.auth import get_user_model
-from .models import FichierSource, Utilisateur
 import uuid
+# NOTE: On utilise des références string ('xcsm.Model') au lieu d'imports directs
+# pour éviter l'import circulaire avec models.py
 
 
 class ProcessingLog(models.Model):
@@ -39,7 +39,7 @@ class ProcessingLog(models.Model):
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     fichier_source = models.ForeignKey(
-        FichierSource,
+        'xcsm.FichierSource',
         on_delete=models.CASCADE,
         related_name='processing_logs'
     )
@@ -137,7 +137,7 @@ class UserActivityLog(models.Model):
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(
-        Utilisateur,
+        'xcsm.Utilisateur',
         on_delete=models.SET_NULL,
         null=True,
         related_name='activity_logs'

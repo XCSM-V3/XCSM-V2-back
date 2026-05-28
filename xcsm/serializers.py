@@ -100,6 +100,7 @@ class RegisterSerializer(serializers.ModelSerializer):
 
 class EnseignantSerializer(serializers.ModelSerializer):
     """Serializer pour les enseignants"""
+    id = serializers.UUIDField(source='utilisateur_id', read_only=True)
     utilisateur = UtilisateurSerializer(read_only=True)
     nom_complet = serializers.SerializerMethodField()
     
@@ -108,11 +109,12 @@ class EnseignantSerializer(serializers.ModelSerializer):
         fields = ['id', 'utilisateur', 'specialite', 'nom_complet']
     
     def get_nom_complet(self, obj):
-        return f"{obj.utilisateur.prenom} {obj.utilisateur.nom}"
+        return f"{obj.utilisateur.first_name} {obj.utilisateur.last_name}".strip() or obj.utilisateur.username
 
 
 class EtudiantSerializer(serializers.ModelSerializer):
     """Serializer pour les étudiants"""
+    id = serializers.UUIDField(source='utilisateur_id', read_only=True)
     utilisateur = UtilisateurSerializer(read_only=True)
     nom_complet = serializers.SerializerMethodField()
     
@@ -121,7 +123,7 @@ class EtudiantSerializer(serializers.ModelSerializer):
         fields = ['id', 'utilisateur', 'niveau', 'nom_complet']
     
     def get_nom_complet(self, obj):
-        return f"{obj.utilisateur.prenom} {obj.utilisateur.nom}"
+        return f"{obj.utilisateur.first_name} {obj.utilisateur.last_name}".strip() or obj.utilisateur.username
 
 
 
@@ -150,6 +152,7 @@ class RessourceSerializer(serializers.ModelSerializer):
 class MatiereSerializer(serializers.ModelSerializer):
     """Serializer pour la gestion des matières"""
     enseignant_nom = serializers.SerializerMethodField()
+    enseignants_noms = serializers.SerializerMethodField()
     nb_etudiants = serializers.SerializerMethodField()
     nb_cours = serializers.SerializerMethodField()
     est_inscrit = serializers.SerializerMethodField() # Pour l'étudiant
@@ -158,13 +161,27 @@ class MatiereSerializer(serializers.ModelSerializer):
         model = Matiere
         fields = [
             'id', 'titre', 'code', 'description', 'image', 'date_creation',
-            'enseignant', 'enseignant_nom', 'nb_etudiants', 'nb_cours', 'est_inscrit'
+            'enseignant', 'enseignant_nom', 'enseignants', 'enseignants_noms', 'nb_etudiants', 'nb_cours', 'est_inscrit'
         ]
         read_only_fields = ['id', 'date_creation', 'enseignant', 'code'] # Code généré ou géré par vue
         
     def get_enseignant_nom(self, obj):
         user = obj.enseignant.utilisateur
         return f"{user.first_name} {user.last_name}"
+
+    def get_enseignants_noms(self, obj):
+        try:
+            noms = []
+            for ens in obj.enseignants.select_related('utilisateur').all():
+                u = ens.utilisateur
+                noms.append(f"{u.first_name} {u.last_name}".strip())
+            # fallback : inclure le owner si la liste est vide
+            if not noms and obj.enseignant_id:
+                u = obj.enseignant.utilisateur
+                noms = [f"{u.first_name} {u.last_name}".strip()]
+            return noms
+        except Exception:
+            return []
         
     def get_nb_etudiants(self, obj):
         return obj.etudiants_inscrits.count()
@@ -446,6 +463,8 @@ class CommentAuthorSerializer(serializers.ModelSerializer):
 class CommentReplySerializer(serializers.ModelSerializer):
     """Mappe l'interface CommentReply du FrontEnd"""
     author = CommentAuthorSerializer(source='auteur', read_only=True)
+    # Mapping explicite : champ 'content' du frontend -> champ 'contenu' du modèle
+    content = serializers.CharField(source='contenu', read_only=True)
     upvotes = serializers.SerializerMethodField()
     user_has_upvoted = serializers.SerializerMethodField()
 
@@ -465,6 +484,7 @@ class CommentReplySerializer(serializers.ModelSerializer):
 class CommentSerializer(serializers.ModelSerializer):
     """Mappe l'interface principale Comment du FrontEnd"""
     granule_id = serializers.CharField(source='granule.id', read_only=True)
+    granule_title = serializers.CharField(source='granule.titre', read_only=True)
     course_id = serializers.CharField(source='cours.id', read_only=True)
     type = serializers.CharField(source='type_commentaire')
     content = serializers.CharField(source='contenu')
@@ -481,7 +501,7 @@ class CommentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Commentaire
         fields = [
-            'id', 'granule_id', 'course_id', 'type', 'content', 'author', 'status',
+            'id', 'granule_id', 'granule_title', 'course_id', 'type', 'content', 'author', 'status',
             'upvotes', 'downvotes', 'user_vote', 'replies', 'replies_count',
             'created_at', 'updated_at', 'is_pinned', 'is_resolved'
         ]

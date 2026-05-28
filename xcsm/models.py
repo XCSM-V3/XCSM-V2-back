@@ -100,7 +100,13 @@ class Matiere(models.Model):
     description = models.TextField(blank=True)
     image = models.ImageField(upload_to='matieres_images/', null=True, blank=True)
     
+    # Enseignant "propriétaire" (créateur / responsable de la matière)
     enseignant = models.ForeignKey(Enseignant, on_delete=models.CASCADE, related_name="mes_matieres")
+
+    # Co-enseignants : tous les enseignants rattachés à la matière
+    # Objectif: permettre à plusieurs enseignants de voir/assister sur les cours d'une même matière.
+    enseignants = models.ManyToManyField(Enseignant, related_name="matieres_partagees", blank=True)
+
     etudiants_inscrits = models.ManyToManyField('Etudiant', related_name='matieres_suivies', blank=True)
     date_creation = models.DateTimeField(auto_now_add=True)
 

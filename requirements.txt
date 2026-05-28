@@ -71,3 +71,6 @@ django-ratelimit==4.1.0
 # OBSERVABILITE & MONITORING
 sentry-sdk==2.19.2
 whitenoise>=6.0.0
+
+# IA (Gemini)
+google-generativeai==0.8.5

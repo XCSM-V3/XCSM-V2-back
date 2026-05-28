@@ -5,17 +5,29 @@ import json
 import logging
 import os
 
-# IMPORT DE GOOGLE GENERATIVE AI (Gemini)
-import google.generativeai as genai
-
-
 logger = logging.getLogger(__name__)
+
+
+def _load_genai():
+    """Import différé pour ne pas bloquer le démarrage Django si le paquet manque."""
+    try:
+        import google.generativeai as genai
+        return genai
+    except ImportError:
+        logger.error(
+            "Paquet google-generativeai absent. "
+            "Installez-le dans l'image Docker (requirements.txt) puis rebuild."
+        )
+        return None
 
 
 # ==============================================================================
 # CONFIGURATION GEMINI
 # ==============================================================================
 def setup_gemini():
+    genai = _load_genai()
+    if genai is None:
+        return None
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         logger.error("⚠️ GEMINI_API_KEY manquante dans l'environnement !")

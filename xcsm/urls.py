@@ -62,7 +62,7 @@ from .views_cours import CoursViewSet
 
 # Import des vues de matières
 from .views_matiere import (
-    MatiereListCreateView, MatiereDetailView, JoinMatiereView
+    MatiereListCreateView, MatiereDetailView, JoinMatiereView, MatiereCoTeachersView, EnseignantListView
 )
 
 # Configuration du router pour les ViewSets
@@ -82,7 +82,9 @@ urlpatterns = [
     # =========================================================================
     path('matieres/', MatiereListCreateView.as_view(), name='matiere-list'),
     path('matieres/<uuid:pk>/', MatiereDetailView.as_view(), name='matiere-detail'),
+    path('matieres/<uuid:pk>/enseignants/', MatiereCoTeachersView.as_view(), name='matiere-co-teachers'),
     path('matieres/join/', JoinMatiereView.as_view(), name='join-matiere'),
+    path('enseignants/', EnseignantListView.as_view(), name='enseignant-list'),
 
     # ANCIENS BULK (A nettoyer plus tard si besoin)
     # =========================================================================

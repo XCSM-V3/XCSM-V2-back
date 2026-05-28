@@ -5,6 +5,7 @@ import json
 import re
 from bson.objectid import ObjectId
 from .utils import get_mongo_db
+from .models import Granule
 
 def get_fichier_json_structure(fichier_source_id):
     """Récupère la structure JSON complète d'un fichier depuis MongoDB."""
@@ -49,7 +50,7 @@ def get_xccm_cours_structure(cours):
     ia_objectifs = []
     ia_mots_cles = []
     
-    fichier_source = cours.enseignant.fichiers_uploades.filter(titre=cours.titre).first()
+    fichier_source = cours.enseignant.mes_fichiers.filter(titre=cours.titre).first()
     if fichier_source and fichier_source.mongo_transforme_id:
         doc_mongo = mongo_db['fichiers_uploades'].find_one({"_id": ObjectId(fichier_source.mongo_transforme_id)})
         if doc_mongo and "structure_json" in doc_mongo:
@@ -94,6 +95,18 @@ def get_xccm_cours_structure(cours):
         }
 
         for chapitre in partie.chapitres.all().order_by('numero'):
+            # Fallback UUID: premier granule réel du chapitre (si certaines sections n'ont aucun granule)
+            chapitre_granules = list(
+                Granule.objects.filter(
+                    sous_section__section__chapitre=chapitre
+                ).order_by(
+                    'sous_section__section__numero',
+                    'sous_section__numero',
+                    'ordre'
+                )
+            )
+            chapitre_fallback_granule_id = str(chapitre_granules[0].id) if chapitre_granules else None
+
             chapter_data = {
                 "title": chapitre.titre,
                 "introduction": f"Introduction du chapitre {chapitre.titre}.",
@@ -102,28 +115,50 @@ def get_xccm_cours_structure(cours):
             }
 
             for section in chapitre.sections.all().order_by('numero'):
-                content_html = ""
-                # Rétrocompatibilité et concaténation
+                # IMPORTANT:
+                # On renvoie un "paragraph" par granule avec son UUID réel.
+                # Cela permet au frontend de tracer progression/commentaires/analytics sans IDs synthétiques.
+                section_paragraphs = []
+
                 if hasattr(section, 'sous_sections') and section.sous_sections.exists():
                     for sous_section in section.sous_sections.all().order_by('numero'):
                         for granule in sous_section.granules.all().order_by('ordre'):
-                            gc = get_granule_content(granule.mongo_contenu_id)
-                            if gc and "html" in gc:
-                                content_html += gc["html"] + "\n"
+                            gc = get_granule_content(granule.mongo_contenu_id) or {}
+                            content_html = gc.get("html") or gc.get("html_content") or gc.get("content") or ""
+                            section_paragraphs.append({
+                                "granule_id": str(granule.id),
+                                "title": granule.titre or section.titre,
+                                "introduction": "Contenu détaillé.",
+                                "content": content_html,
+                                "notions": ia_mots_cles,  # INJECTION IA des mots-clés dans les paragraphes
+                                "exercise": None
+                            })
                 elif hasattr(section, 'granules'):
                     for granule in section.granules.all().order_by('ordre'):
-                        gc = get_granule_content(granule.mongo_contenu_id)
-                        if gc and "html" in gc:
-                            content_html += gc["html"] + "\n"
+                        gc = get_granule_content(granule.mongo_contenu_id) or {}
+                        content_html = gc.get("html") or gc.get("html_content") or gc.get("content") or ""
+                        section_paragraphs.append({
+                            "granule_id": str(granule.id),
+                            "title": granule.titre or section.titre,
+                            "introduction": "Contenu détaillé.",
+                            "content": content_html,
+                            "notions": ia_mots_cles,
+                            "exercise": None
+                        })
 
-                paragraph_data = {
-                    "title": section.titre,
-                    "introduction": "Contenu détaillé.",
-                    "content": content_html.strip(),
-                    "notions": ia_mots_cles, # INJECTION IA des mots-clés dans les paragraphes
-                    "exercise": None
-                }
-                chapter_data["paragraphs"].append(paragraph_data)
+                # Fallback: aucun granule trouvé -> garder un paragraphe vide pour ne pas casser l'UI
+                if not section_paragraphs:
+                    section_paragraphs.append({
+                        # On injecte un UUID de fallback pour permettre tracking/commentaires partout.
+                        "granule_id": chapitre_fallback_granule_id,
+                        "title": section.titre,
+                        "introduction": "Contenu détaillé.",
+                        "content": "",
+                        "notions": ia_mots_cles,
+                        "exercise": None
+                    })
+
+                chapter_data["paragraphs"].extend(section_paragraphs)
             section_data["chapters"].append(chapter_data)
         structure["sections"].append(section_data)
 

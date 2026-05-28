@@ -62,9 +62,14 @@ class CoursViewSet(viewsets.ModelViewSet):
         queryset = Cours.objects.select_related('matiere', 'enseignant__utilisateur').all()
         user = self.request.user
         
-        # 1. Si Enseignant -> Voir SES cours (via ses matières ou directement)
+        # 1. Si Enseignant -> Voir les cours des matières où il est enseignant
         if hasattr(user, 'profil_enseignant'):
-            queryset = queryset.filter(enseignant=user.profil_enseignant)
+            ens = user.profil_enseignant
+            queryset = queryset.filter(
+                Q(enseignant=ens) |
+                Q(matiere__enseignant=ens) |
+                Q(matiere__enseignants=ens)
+            ).distinct()
             
         # 2. Si Etudiant -> Voir les cours des MATIÈRES où il est inscrit
         elif hasattr(user, 'profil_etudiant'):
@@ -246,12 +251,17 @@ class CoursViewSet(viewsets.ModelViewSet):
         """GET /api/v1/cours/{id}/contenu/ - Structure complète du cours format XCCM"""
         cours = self.get_object()
         
-        # Vérification des accès : propriétaire OU inscrit
-        is_owner = False
+        # Vérification des accès : enseignant autorisé (owner OU enseignant de la matière) OU étudiant inscrit
+        is_teacher_allowed = False
         try:
             enseignant = Enseignant.objects.get(utilisateur=request.user)
             if cours.enseignant.pk == enseignant.pk:
-                is_owner = True
+                is_teacher_allowed = True
+            elif cours.matiere and (
+                cours.matiere.enseignant_id == enseignant.pk or
+                cours.matiere.enseignants.filter(pk=enseignant.pk).exists()
+            ):
+                is_teacher_allowed = True
         except Enseignant.DoesNotExist:
             pass
             
@@ -263,7 +273,7 @@ class CoursViewSet(viewsets.ModelViewSet):
         except Etudiant.DoesNotExist:
             pass
             
-        if not (is_owner or is_enrolled) and not request.user.is_staff:
+        if not (is_teacher_allowed or is_enrolled) and not request.user.is_staff:
             return Response(
                 {'error': 'Vous devez être inscrit à ce cours pour voir son contenu'},
                 status=status.HTTP_403_FORBIDDEN
@@ -286,8 +296,15 @@ class CoursViewSet(viewsets.ModelViewSet):
         try:
             est_autorise = False
             
-            if hasattr(request.user, 'profil_enseignant') and cours.enseignant == request.user.profil_enseignant:
-                est_autorise = True
+            if hasattr(request.user, 'profil_enseignant'):
+                ens = request.user.profil_enseignant
+                if cours.enseignant == ens:
+                    est_autorise = True
+                elif cours.matiere and (
+                    cours.matiere.enseignant_id == ens.pk or
+                    cours.matiere.enseignants.filter(pk=ens.pk).exists()
+                ):
+                    est_autorise = True
             elif hasattr(request.user, 'profil_etudiant'):
                 etudiant = Etudiant.objects.get(utilisateur=request.user)
                 if is_etudiant_inscrit(cours, etudiant):

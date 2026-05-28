@@ -3,6 +3,7 @@ from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import IsAuthenticated
+from django.db.models import Q
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.views import APIView
 
@@ -13,11 +14,9 @@ from .processing import process_and_store_document
 from datetime import datetime
 from .utils import get_mongo_db
 from .json_utils import (
-    get_fichier_json_structure, 
+    get_fichier_json_structure,
     get_granule_content,
-    get_cours_complete_structure,
-    search_in_granules,
-    get_statistics
+    get_statistics,
 )
 
 
@@ -424,8 +423,13 @@ class GranuleSearchView(APIView):
         # Déterminer les cours accessibles selon le rôle
         try:
             if hasattr(user, 'profil_enseignant'):
-                # Enseignant : ses propres cours
-                accessible_courses = Cours.objects.filter(enseignant=user.profil_enseignant)
+                # Enseignant : cours des matières où il est enseignant (owner ou collègue)
+                ens = user.profil_enseignant
+                accessible_courses = Cours.objects.filter(
+                    Q(enseignant=ens) |
+                    Q(matiere__enseignant=ens) |
+                    Q(matiere__enseignants=ens)
+                ).distinct()
                 user_role = 'enseignant'
             elif hasattr(user, 'profil_etudiant'):
                 # Étudiant : cours inscrits (via Matières)

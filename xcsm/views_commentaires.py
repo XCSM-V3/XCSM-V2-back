@@ -8,6 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from .models import Commentaire, Granule, Cours, Notification
 from .serializers import CommentSerializer, CommentReplySerializer, NotificationSerializer
 from django.db.models import Count
+from django.db.models import Q
 
 class CommentaireViewSet(viewsets.ModelViewSet):
     """
@@ -41,6 +42,57 @@ class CommentaireViewSet(viewsets.ModelViewSet):
 
         return queryset
 
+    @action(detail=False, methods=['get'], url_path='teacher')
+    def teacher(self, request, *args, **kwargs):
+        """
+        Retourne tous les commentaires des cours appartenant à l'enseignant connecté.
+        Utilisé par le tableau de bord enseignant.
+        """
+        if not hasattr(request.user, 'profil_enseignant'):
+            return Response({"error": "Accès réservé aux enseignants."}, status=status.HTTP_403_FORBIDDEN)
+
+        queryset = Commentaire.objects.filter(parent__isnull=True).filter(
+            Q(cours__enseignant__utilisateur=request.user) |
+            Q(cours__matiere__enseignant__utilisateur=request.user) |
+            Q(cours__matiere__enseignants__utilisateur=request.user)
+        ).select_related('auteur', 'granule', 'cours').distinct()
+
+        course_id = request.query_params.get('course_id')
+        type_filtre = request.query_params.get('type')
+        status_filtre = request.query_params.get('status')
+        sort = request.query_params.get('sort', 'recent')
+
+        if course_id:
+            queryset = queryset.filter(cours_id=course_id)
+        if type_filtre and type_filtre != 'all':
+            queryset = queryset.filter(type_commentaire=type_filtre)
+        if status_filtre:
+            queryset = queryset.filter(statut=status_filtre)
+
+        # Tri
+        if sort == 'top':
+            queryset = queryset.annotate(upvote_count=Count('upvotes')).order_by('-upvote_count', '-created_at')
+        elif sort == 'pending':
+            # Les commentaires en attente d'abord
+            queryset = queryset.order_by('statut', '-created_at')  # 'approved' vs 'pending' (pending < approved alphabétiquement? Non. 'approved' < 'pending'. Donc order_by('-statut') mettra 'pending' d'abord)
+            queryset = queryset.order_by('-statut', '-created_at')
+        else:
+            queryset = queryset.order_by('-created_at')
+
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response({
+            "comments": serializer.data,
+            "total": queryset.count(),
+            "pending": queryset.filter(statut="pending").count(),
+            "suggestions": queryset.filter(type_commentaire__in=["suggestion", "correction"]).count()
+        })
+
+
     def list(self, request, *args, **kwargs):
         """Surcharge pour correspondre au format de réponse paginé attendu par useComments.ts"""
         queryset = self.filter_queryset(self.get_queryset())
@@ -69,6 +121,16 @@ class CommentaireViewSet(viewsets.ModelViewSet):
                 contenu=data.get('content'),
                 statut=statut
             )
+            
+            # ── NOUVEAU: Notification pour l'enseignant propriétaire du cours ──
+            if cours.enseignant and cours.enseignant.utilisateur != request.user:
+                Notification.objects.create(
+                    destinataire=cours.enseignant.utilisateur,
+                    type_notif='comment',
+                    title="Nouveau commentaire" if type_c == 'comment' else f"Nouvelle {type_c}",
+                    message=f"{request.user.first_name} a laissé un {type_c} sur votre cours '{cours.titre}'.",
+                    actor_name=f"{request.user.first_name} {request.user.last_name}"
+                )
             
             serializer = self.get_serializer(commentaire)
             return Response({"comment": serializer.data}, status=status.HTTP_201_CREATED)

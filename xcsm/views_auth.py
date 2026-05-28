@@ -350,7 +350,15 @@ def mes_cours_view(request):
     """GET /api/cours/mes-cours/"""
     try:
         enseignant = Enseignant.objects.get(utilisateur=request.user)
-        cours = Cours.objects.filter(enseignant=enseignant).order_by('-date_creation')
+        # L'enseignant voit :
+        # - ses cours (owner)
+        # - les cours des matières où il est co-enseignant
+        from django.db.models import Q
+        cours = Cours.objects.filter(
+            Q(enseignant=enseignant) |
+            Q(matiere__enseignant=enseignant) |
+            Q(matiere__enseignants=enseignant)
+        ).distinct().order_by('-date_creation')
         role = 'enseignant'
     except Enseignant.DoesNotExist:
         try:
