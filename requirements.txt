@@ -36,6 +36,9 @@ dnspython==2.8.0
 # ASYNC TASKS & QUEUING
 celery==5.4.0
 
+# GOOGLE AI (Gemini)
+google-generativeai>=0.8.0
+
 # API DOCUMENTATION & TOOLS
 drf-spectacular>=0.27.0
 python-dotenv==1.0.1
