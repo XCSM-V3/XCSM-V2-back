@@ -40,7 +40,7 @@ INSTALLED_APPS = [
     
     # Third party apps
     'rest_framework',
-    'drf_yasg',
+    'drf_spectacular',
     'corsheaders',
     'rest_framework_simplejwt',             
     'rest_framework_simplejwt.token_blacklist',  
@@ -63,8 +63,16 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-# Configuration CORS (POUR LE DÉVELOPPEMENT)
-CORS_ALLOW_ALL_ORIGINS = True # Permet à n'importe quel frontend (localhost) de se connecter
+# Configuration CORS
+# En développement (DEBUG=True) : tout autoriser pour faciliter le travail local.
+# En production (DEBUG=False)   : restreindre aux origines explicitement listées.
+CORS_ALLOW_ALL_ORIGINS = DEBUG  # True seulement en local
+
+if not DEBUG:
+    # Exemple : "https://xcsm-frontend-app.vercel.app,https://mon-domaine.com"
+    _cors_origins = os.getenv('CORS_ALLOWED_ORIGINS', '')
+    CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_origins.split(',') if o.strip()]
+
 CORS_ALLOW_METHODS = [
     'DELETE',
     'GET',
@@ -270,3 +278,20 @@ CELERY_RESULT_EXPIRES = 86400
 # Timezone
 CELERY_TIMEZONE = 'UTC'
 CELERY_ENABLE_UTC = True
+
+# ==============================================================================
+# SENTRY — Monitoring des erreurs (production uniquement)
+# ==============================================================================
+_sentry_dsn = os.getenv('SENTRY_DSN', '')
+if _sentry_dsn and not DEBUG:
+    import sentry_sdk
+    from sentry_sdk.integrations.django import DjangoIntegration
+    from sentry_sdk.integrations.celery import CeleryIntegration
+
+    sentry_sdk.init(
+        dsn=_sentry_dsn,
+        integrations=[DjangoIntegration(), CeleryIntegration()],
+        traces_sample_rate=0.2,   # 20 % des transactions tracées (ajuster si besoin)
+        send_default_pii=False,   # RGPD : ne pas envoyer les données personnelles
+        environment="production",
+    )
