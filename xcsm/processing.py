@@ -121,39 +121,173 @@ def extract_images_from_pdf(fichier_source_instance):
         print(f"Erreur extraction image : {e}")
         return 0
 
+def _grouper_sections_par_hierarchie(flat_sections):
+    """
+    Regroupe la liste plate de sections (h1/h2/h3/p/ul/ol) en une arborescence :
+      Partie (h1) → Chapitre (h2) → Granule (h3 + paragraphes suivants | groupe de p)
+
+    Retourne :
+    [
+        {
+            "title": "Titre Partie",
+            "chapitres": [
+                {
+                    "title": "Titre Chapitre",
+                    "granules": [
+                        {"title": "Titre Granule", "html": "<p>…</p>", "content": "texte brut"}
+                    ]
+                }
+            ]
+        }
+    ]
+    """
+    parties = []
+    current_partie = None
+    current_chapitre = None
+    buf_html = []   # accumule le HTML des paragraphes du granule en cours
+    buf_text = []   # accumule le texte brut (pour le titre)
+
+    def _flush():
+        """Persiste le buffer en cours comme un nouveau granule."""
+        if buf_html and current_chapitre is not None:
+            title_brut = buf_text[0] if buf_text else "Contenu"
+            # Nettoie le titre : enlève les balises HTML résiduelles, tronque
+            from bs4 import BeautifulSoup as _BS
+            title = _BS(title_brut, "html.parser").get_text(strip=True)[:255] or "Contenu"
+            current_chapitre["granules"].append({
+                "title": title,
+                "html": "\n".join(buf_html),
+                "content": " ".join(buf_text),
+            })
+        buf_html.clear()
+        buf_text.clear()
+
+    def _ensure_partie(title="Partie 1"):
+        nonlocal current_partie, current_chapitre
+        if current_partie is None:
+            current_partie = {"title": title, "chapitres": []}
+            parties.append(current_partie)
+            # Chapitre par défaut pour le contenu orphelin avant le premier h2
+            current_chapitre = {"title": "Contenu", "granules": []}
+            current_partie["chapitres"].append(current_chapitre)
+
+    def _ensure_chapitre(title="Contenu"):
+        nonlocal current_chapitre
+        _ensure_partie()
+        if current_chapitre is None:
+            current_chapitre = {"title": title, "granules": []}
+            current_partie["chapitres"].append(current_chapitre)
+
+    for sec in flat_sections:
+        t       = sec.get("type", "p")
+        content = sec.get("content", "").strip()
+        html    = sec.get("html", f"<p>{content}</p>")
+
+        if not content:
+            continue
+
+        if t == "h1":
+            _flush()
+            current_partie  = {"title": content, "chapitres": []}
+            current_chapitre = {"title": "Contenu", "granules": []}
+            current_partie["chapitres"].append(current_chapitre)
+            parties.append(current_partie)
+
+        elif t == "h2":
+            _flush()
+            _ensure_partie()
+            current_chapitre = {"title": content, "granules": []}
+            current_partie["chapitres"].append(current_chapitre)
+
+        elif t == "h3":
+            # h3 délimite un nouveau granule : on flush le précédent puis commence le nouveau
+            _flush()
+            _ensure_chapitre()
+            buf_html.append(html)
+            buf_text.append(content)
+
+        else:  # p, ul, ol → contenu d'un granule
+            _ensure_chapitre()
+            buf_html.append(html)
+            buf_text.append(content)
+
+    _flush()  # flush final
+
+    # Nettoie les chapitres/parties vides
+    for p in parties:
+        p["chapitres"] = [c for c in p["chapitres"] if c["granules"]]
+    parties = [p for p in parties if p["chapitres"]]
+
+    # Fallback : document sans aucun titre structurant
+    if not parties:
+        all_html    = "\n".join(s.get("html", "") for s in flat_sections if s.get("content"))
+        all_content = " ".join(s.get("content", "") for s in flat_sections[:3])
+        parties = [{
+            "title": "Contenu du cours",
+            "chapitres": [{
+                "title": "Contenu",
+                "granules": [{"title": all_content[:255] or "Contenu", "html": all_html, "content": all_content}]
+            }]
+        }]
+
+    return parties
+
+
 def split_and_create_granules(fichier_source, json_structure):
-    """Crée les entrées MySQL et MongoDB (Granules)"""
+    """
+    Crée les entrées PostgreSQL (Partie/Chapitre/Section/SousSection/Granule)
+    et MongoDB (contenu HTML de chaque granule) en respectant la hiérarchie :
+        h1 → Partie  |  h2 → Chapitre  |  h3/p → Granule
+    """
     with transaction.atomic():
         cours, _ = Cours.objects.get_or_create(
             titre=fichier_source.titre,
             enseignant=fichier_source.enseignant,
             defaults={'matiere': fichier_source.matiere}
         )
-        # Votre logique complexe de création (Partie, Chapitre, Section, Granule)
-        # reste inchangée ici. Pour l'exemple complet, on crée un Granule global.
-        mongo_db = get_mongo_db()
-        for i, section in enumerate(json_structure.get("sections", [])):
-            partie, _ = Partie.objects.get_or_create(cours=cours, titre=f"Partie {i+1}", numero=i+1)
-            chapitre, _ = Chapitre.objects.get_or_create(partie=partie, titre="Contenu", numero=1)
-            sec, _ = Section.objects.get_or_create(chapitre=chapitre, titre=section.get("content", "Section")[:50], numero=1)
-            # Granule requires a SousSection FK — create one under the Section
-            sous_sec, _ = SousSection.objects.get_or_create(section=sec, titre="Contenu", numero=1)
 
-            mongo_id = mongo_db['granules'].insert_one({
-                "fichier_source_id": str(fichier_source.id),
-                "html": section.get("html", ""),
-                "content": section.get("content", ""),
-                "type": section.get("type", "p")
-            }).inserted_id
+        mongo_db     = get_mongo_db()
+        flat_sections = json_structure.get("sections", [])
+        parties_data  = _grouper_sections_par_hierarchie(flat_sections)
 
-            Granule.objects.create(
-                sous_section=sous_sec,
-                fichier_source=fichier_source,
-                titre=section.get("content", "Granule")[:50],
-                type_contenu="TEXTE",
-                mongo_contenu_id=str(mongo_id),
-                ordre=i
+        for pi, partie_data in enumerate(parties_data):
+            partie, _ = Partie.objects.get_or_create(
+                cours=cours, numero=pi + 1,
+                defaults={"titre": partie_data["title"]}
             )
+
+            for ci, chapitre_data in enumerate(partie_data["chapitres"]):
+                chapitre, _ = Chapitre.objects.get_or_create(
+                    partie=partie, numero=ci + 1,
+                    defaults={"titre": chapitre_data["title"]}
+                )
+
+                for gi, granule_data in enumerate(chapitre_data["granules"]):
+                    sec, _ = Section.objects.get_or_create(
+                        chapitre=chapitre, numero=gi + 1,
+                        defaults={"titre": granule_data["title"][:200]}
+                    )
+                    sous_sec, _ = SousSection.objects.get_or_create(
+                        section=sec, numero=1,
+                        defaults={"titre": "Contenu"}
+                    )
+
+                    mongo_id = mongo_db["granules"].insert_one({
+                        "fichier_source_id": str(fichier_source.id),
+                        "html":    granule_data["html"],
+                        "content": granule_data["content"],
+                        "type":    "TEXTE",
+                    }).inserted_id
+
+                    Granule.objects.create(
+                        sous_section=sous_sec,
+                        fichier_source=fichier_source,
+                        titre=granule_data["title"][:255],
+                        type_contenu="TEXTE",
+                        mongo_contenu_id=str(mongo_id),
+                        ordre=gi,
+                    )
+
         return cours
 
 # ==============================================================================
