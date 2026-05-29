@@ -316,7 +316,7 @@ class FichierSourceSerializer(serializers.ModelSerializer):
             'id', 'statut_traitement', 
             'date_upload', 'enseignant', 'mongo_transforme_id'
         ]
-        extra_kwargs = {'matiere': {'required': True}} # Matière obligatoire à l'upload
+        extra_kwargs = {'matiere': {'required': False, 'allow_null': True}} # Matière optionnelle à l'upload
     
     def get_course_id(self, obj):
         # Essayer de trouver le cours généré lié à ce fichier (via Matiere)
