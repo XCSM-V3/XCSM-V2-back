@@ -97,8 +97,27 @@ class CoursViewSet(viewsets.ModelViewSet):
         return queryset.order_by('-date_creation')
     
     def create(self, request, *args, **kwargs):
-        """POST /api/v1/cours/ - Création manuelle"""
-        return Response({'message': 'Veuillez utiliser l\'upload de fichier pour créer un cours.'}, status=status.HTTP_400_BAD_REQUEST)
+        """POST /api/v1/cours/ - Création manuelle (titre + description)"""
+        try:
+            enseignant = Enseignant.objects.get(utilisateur=request.user)
+        except Enseignant.DoesNotExist:
+            return Response({'message': 'Seul un enseignant peut créer un cours.'}, status=status.HTTP_403_FORBIDDEN)
+
+        titre = request.data.get('titre', '').strip()
+        description = request.data.get('description', '').strip()
+
+        if not titre:
+            return Response({'titre': ['Ce champ est obligatoire.']}, status=status.HTTP_400_BAD_REQUEST)
+
+        cours = Cours.objects.create(
+            enseignant=enseignant,
+            titre=titre,
+            description=description,
+            est_publie=False,
+        )
+
+        serializer = CoursDetailSerializer(cours, context={'request': request})
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
     
     def retrieve(self, request, *args, **kwargs):
         """GET /api/v1/cours/{id}/ - Détail d'un cours"""
