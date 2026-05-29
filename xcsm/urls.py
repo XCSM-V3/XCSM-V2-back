@@ -2,6 +2,8 @@
 Configuration complète des endpoints XCSM - VERSION CORRIGÉE
 """
 
+from django.http import JsonResponse
+from django.utils import timezone
 from django.urls import path, include
 
 
@@ -149,4 +151,9 @@ urlpatterns = [
     # ROUTER (COURS VIEWSET) - TOUTES LES AUTRES ACTIONS COURS
     # =========================================================================
     path('', include(router.urls)),
+
+    # =========================================================================
+    # HEALTH CHECK (keep-alive Render free tier)
+    # =========================================================================
+    path('ping/', lambda req: JsonResponse({"status": "ok", "time": timezone.now().isoformat()}), name='ping'),
 ]
