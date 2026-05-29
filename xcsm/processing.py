@@ -148,6 +148,7 @@ def split_and_create_granules(fichier_source, json_structure):
 
             Granule.objects.create(
                 sous_section=sous_sec,
+                fichier_source=fichier_source,
                 titre=section.get("content", "Granule")[:50],
                 type_contenu="TEXTE",
                 mongo_contenu_id=str(mongo_id),
