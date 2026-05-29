@@ -126,7 +126,8 @@ def split_and_create_granules(fichier_source, json_structure):
     with transaction.atomic():
         cours, _ = Cours.objects.get_or_create(
             titre=fichier_source.titre,
-            enseignant=fichier_source.enseignant
+            enseignant=fichier_source.enseignant,
+            defaults={'matiere': fichier_source.matiere}
         )
         # Votre logique complexe de création (Partie, Chapitre, Section, Granule)
         # reste inchangée ici. Pour l'exemple complet, on crée un Granule global.
@@ -135,16 +136,18 @@ def split_and_create_granules(fichier_source, json_structure):
             partie, _ = Partie.objects.get_or_create(cours=cours, titre=f"Partie {i+1}", numero=i+1)
             chapitre, _ = Chapitre.objects.get_or_create(partie=partie, titre="Contenu", numero=1)
             sec, _ = Section.objects.get_or_create(chapitre=chapitre, titre=section.get("content", "Section")[:50], numero=1)
-            
+            # Granule requires a SousSection FK — create one under the Section
+            sous_sec, _ = SousSection.objects.get_or_create(section=sec, titre="Contenu", numero=1)
+
             mongo_id = mongo_db['granules'].insert_one({
                 "fichier_source_id": str(fichier_source.id),
                 "html": section.get("html", ""),
                 "content": section.get("content", ""),
                 "type": section.get("type", "p")
             }).inserted_id
-            
+
             Granule.objects.create(
-                section=sec,
+                sous_section=sous_sec,
                 titre=section.get("content", "Granule")[:50],
                 type_contenu="TEXTE",
                 mongo_contenu_id=str(mongo_id),
