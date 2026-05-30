@@ -65,13 +65,21 @@ MIDDLEWARE = [
 
 # Configuration CORS
 # En développement (DEBUG=True) : tout autoriser pour faciliter le travail local.
-# En production (DEBUG=False)   : restreindre aux origines explicitement listées.
+# En production (DEBUG=False)   : autoriser Vercel + origines explicites via env var.
 CORS_ALLOW_ALL_ORIGINS = DEBUG  # True seulement en local
 
 if not DEBUG:
-    # Exemple : "https://xcsm-frontend-app.vercel.app,https://mon-domaine.com"
+    # Origines explicites via variable d'environnement (optionnel)
     _cors_origins = os.getenv('CORS_ALLOWED_ORIGINS', '')
     CORS_ALLOWED_ORIGINS = [o.strip() for o in _cors_origins.split(',') if o.strip()]
+
+    # Regex : autoriser TOUS les sous-domaines *.vercel.app (déploiements Vercel)
+    # et localhost:3000 pour les tests en local contre le back Render
+    CORS_ALLOWED_ORIGIN_REGEXES = [
+        r"^https://.*\.vercel\.app$",
+        r"^http://localhost:3000$",
+        r"^http://127\.0\.0\.1:3000$",
+    ]
 
 CORS_ALLOW_METHODS = [
     'DELETE',
