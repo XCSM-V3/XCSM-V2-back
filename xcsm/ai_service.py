@@ -33,8 +33,8 @@ def setup_gemini():
         logger.error("⚠️ GEMINI_API_KEY manquante dans l'environnement !")
         return None
     genai.configure(api_key=api_key)
-    # On utilise gemini-1.5-flash pour sa rapidité et son grand contexte
-    return genai.GenerativeModel('gemini-1.5-flash')
+    # On utilise gemini-2.0-flash pour sa rapidité et son grand contexte
+    return genai.GenerativeModel('gemini-2.0-flash')
 
 # ==============================================================================
 # MODULE 1: ASSISTANT IA CONVERSATIONNEL (CHAT)
