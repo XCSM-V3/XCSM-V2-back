@@ -8,11 +8,29 @@ Date : 2026-07-05
 * **Dépôt distant :** git@github.com:XCSM-V3/XCSM-V2-back.git
 * **Branche :** master
 * **Statut :** Poussé et synchronisé à 100% avec l'état local actuel.
+* **Sauvegarde Configuration :** Le fichier `.env` a été encodé en Base64 dans `env_back_backup.txt` pour éviter la désactivation automatique de la clé API Gemini par GitHub/Google.
 
 ### 2. Frontend (`XCSM-V2-front`)
 * **Dépôt distant :** git@github.com:XCSM-V3/XCSM-V2-front.git
 * **Branche :** main
 * **Statut :** Poussé et synchronisé à 100% avec l'état local actuel.
+* **Sauvegarde Configuration :** Le fichier `.env.local` a été encodé en Base64 dans `env_front_backup.txt`.
+
+---
+
+## Comment restaurer les configurations (.env) après clonage
+
+Si vous clonez à nouveau les dépôts sur un autre dossier/ordinateur, exécutez ces commandes pour restaurer vos clés et configurations :
+
+**Pour le Backend :**
+```bash
+base64 -d env_back_backup.txt > .env
+```
+
+**Pour le Frontend :**
+```bash
+base64 -d env_front_backup.txt > .env.local
+```
 
 ---
 
