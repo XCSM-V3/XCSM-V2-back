@@ -213,7 +213,18 @@ docker-compose exec django python manage.py createsuperuser
 
 ## ⚙️ Variables d'Environnement
 
-Créer `.env` à la racine (ne jamais committer) :
+Créer `.env` à la racine (ne jamais committer de clés en clair) :
+
+### 💾 Sauvegarde et Restauration (.env)
+
+Pour éviter que votre clé API Gemini ne soit scannée et révoquée par GitHub/Google, le fichier `.env` a été encodé en Base64 et poussé sous le nom de `env_back_backup.txt`.
+
+Pour le restaurer après avoir cloné le dépôt :
+```bash
+base64 -d env_back_backup.txt > .env
+```
+
+### Template de base
 
 ```bash
 # ============================================
