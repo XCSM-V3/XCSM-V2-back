@@ -1,0 +1,19 @@
+# Détails du Déploiement / Pushes Git
+
+Date : 2026-07-05
+
+## Dépôts et Branches
+
+### 1. Backend (`XCSM-V2-back`)
+* **Dépôt distant :** git@github.com:XCSM-V3/XCSM-V2-back.git
+* **Branche :** master
+* **Statut :** Poussé et synchronisé à 100% avec l'état local actuel.
+
+### 2. Frontend (`XCSM-V2-front`)
+* **Dépôt distant :** git@github.com:XCSM-V3/XCSM-V2-front.git
+* **Branche :** main
+* **Statut :** Poussé et synchronisé à 100% avec l'état local actuel.
+
+---
+
+*Note : Les fusions ont été faites avec la stratégie `ours` pour préserver exactement le code local de cette machine.*
