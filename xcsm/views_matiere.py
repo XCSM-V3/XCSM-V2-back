@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 
-from .models import Matiere, Enseignant, Etudiant
+from .models import Matiere, Enseignant, Etudiant, Notification
 from .serializers import MatiereSerializer, MatiereCreateSerializer, EnseignantSerializer
 from django.db.models import Q
 
@@ -155,7 +155,18 @@ class MatiereCoTeachersView(APIView):
 
         # Ajouter les co-enseignants
         matiere.enseignants.add(*enseignants)
-        
+
+        for ens in enseignants:
+            Notification.objects.create(
+                destinataire=ens.utilisateur,
+                type_notif='co_teacher_added',
+                title="Ajouté comme co-enseignant",
+                message=f"{request.user.first_name} {request.user.last_name} vous a ajouté comme co-enseignant sur '{matiere.titre}'.",
+                link=f"/dashboard/matieres/{matiere.id}",
+                actor_name=f"{request.user.first_name} {request.user.last_name}",
+                actor_role='enseignant',
+            )
+
         co_teachers = matiere.enseignants.all()
         serializer = EnseignantSerializer(co_teachers, many=True)
         return Response({
@@ -190,5 +201,14 @@ class MatiereCoTeachersView(APIView):
 
         # Retirer le co-enseignant
         matiere.enseignants.remove(enseignant)
-        
+
+        Notification.objects.create(
+            destinataire=enseignant.utilisateur,
+            type_notif='co_teacher_removed',
+            title="Retiré comme co-enseignant",
+            message=f"{request.user.first_name} {request.user.last_name} vous a retiré des co-enseignants de '{matiere.titre}'.",
+            actor_name=f"{request.user.first_name} {request.user.last_name}",
+            actor_role='enseignant',
+        )
+
         return Response({"message": "Co-enseignant retiré avec succès"}, status=status.HTTP_200_OK)

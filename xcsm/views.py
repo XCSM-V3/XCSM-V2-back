@@ -10,7 +10,7 @@ from rest_framework.views import APIView
 from .models import FichierSource, Cours, Granule
 from .serializers import FichierSourceSerializer
 from .permissions import IsEnseignant
-from .processing import process_and_store_document
+from .tasks import process_document_task
 from datetime import datetime
 from .utils import get_mongo_db
 from .json_utils import (
@@ -61,36 +61,24 @@ class DocumentUploadView(generics.CreateAPIView):
         headers = self.get_success_headers(serializer.data)
 
         print(f"🚀 [API] Upload reçu. Démarrage du traitement ASYNCHRONE (Celery) pour : {instance.titre}")
-        
-        # Lancement du traitement via Celery
+
+        # Lancement du traitement en tâche de fond (worker Celery). Local/Docker :
+        # web et worker partagent le même volume media, donc plus besoin du mode
+        # synchrone qui existait uniquement pour contourner la contrainte de disque
+        # non partagé de Render (plan gratuit).
         try:
-            # MODE SYNCHRONE (POUR RENDER GRATUIT)
-            # Puisque le Worker ne partage pas le disque avec le Web, on doit tout faire ici.
-            from .processing import process_and_store_document
-            print(f"🚀 [API] Traitement SYNCHRONE immédiat pour ID: {instance.id}")
-            
-            # Appel direct de la fonction de traitement
-            success, message = process_and_store_document(instance)
-            
-            if success:
-                print(f"✅ [API] Traitement SUCCÈS pour ID: {instance.id}")
-                # Réponse immédiate avec succès
-                response_data = serializer.data
-                response_data['message'] = f"Document traité avec succès: {message}"
-                response_data['statut'] = "TRAITE"
-                # On triche un peu sur le code retour pour dire "Tout est fini"
-                return Response(response_data, status=status.HTTP_201_CREATED, headers=headers)
-            else:
-                print(f"❌ [API] Echec du traitement: {message}")
-                response_data = serializer.data
-                response_data['message'] = f"Erreur lors du traitement: {message}"
-                response_data['statut'] = "ERREUR"
-                return Response(response_data, status=status.HTTP_202_ACCEPTED, headers=headers)
+            process_document_task.delay(str(instance.id))
+            response_data = serializer.data
+            response_data['message'] = "Document reçu, traitement en cours."
+            response_data['statut'] = instance.statut_traitement
+            return Response(response_data, status=status.HTTP_202_ACCEPTED, headers=headers)
 
         except Exception as e:
-            print(f"❌ [API] ERREUR CRITIQUE traitement synchrone: {str(e)}")
+            print(f"❌ [API] ERREUR CRITIQUE lors du lancement du traitement: {str(e)}")
             import traceback
             traceback.print_exc()
+            instance.statut_traitement = 'ERREUR'
+            instance.save(update_fields=['statut_traitement'])
             response_data = serializer.data
             response_data['message'] = f"Erreur critique: {str(e)}"
             response_data['statut'] = "ERREUR"
@@ -191,10 +179,11 @@ class DocumentListView(generics.ListAPIView):
         except:
             return FichierSource.objects.none()
 
-class DocumentDeleteView(generics.DestroyAPIView):
+class DocumentDeleteView(generics.RetrieveDestroyAPIView):
     """
-    Supprimer un document (et ses granules associés en cascade)
-    DELETE /api/v1/documents/<uuid:pk>/
+    Consulter (GET, pour poller statut_traitement) ou supprimer (DELETE) un document.
+    GET /api/v1/documents/<uuid:pk>/
+    DELETE /api/v1/documents/<uuid:pk>/ (avec ses granules associés en cascade)
     """
     queryset = FichierSource.objects.all()
     serializer_class = FichierSourceSerializer
@@ -481,9 +470,11 @@ class GranuleSearchView(APIView):
         
         # 2. Recherche dans la structure SQL (Titres des Parties, Chapitres, Sections...)
         # Si la recherche ne donne rien dans le texte, peut-être que c'est le titre d'un chapitre
-        from django.db.models import Q
+        # (Q est déjà importé au niveau du module ; un ré-import local ici transformait Q en
+        # variable locale pour toute la fonction et cassait son usage plus haut avec un
+        # UnboundLocalError pour tout enseignant effectuant une recherche.)
         import re
-        
+
         # Sécurisation simple pour la recherche SQL
         sql_query = query.strip()
         
@@ -556,7 +547,7 @@ class GranuleSearchView(APIView):
                     'cours': {
                         'id': str(cours.id),
                         'titre': cours.titre,
-                        'code': cours.code,
+                        'code': cours.matiere.code if cours.matiere else 'N/A',
                     },
                     'chemin_hierarchique': {
                         'partie': granule.sous_section.section.chapitre.partie.titre,
@@ -572,7 +563,7 @@ class GranuleSearchView(APIView):
                 continue
             except Exception:
                 continue
-                
+
         # Traitement résultats Structure SQL
         for granule, match_reason in structure_results:
             if granule.id in seen_granule_ids: continue
@@ -602,7 +593,7 @@ class GranuleSearchView(APIView):
                     'cours': {
                         'id': str(cours.id),
                         'titre': cours.titre,
-                        'code': cours.code,
+                        'code': cours.matiere.code if cours.matiere else 'N/A',
                     },
                     'chemin_hierarchique': {
                         'partie': granule.sous_section.section.chapitre.partie.titre,
@@ -641,7 +632,7 @@ class MongoStatisticsView(APIView):
         - Nombre de granules
         - Nom de la base
     """
-    permission_classes = []  # Authentification désactivée pour DEV
+    permission_classes = [IsAuthenticated]
     
     def get(self, request):
         stats = get_statistics()

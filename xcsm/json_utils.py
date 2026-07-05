@@ -37,10 +37,53 @@ def get_granule_content(mongo_contenu_id):
         print(f"❌ Erreur get_granule_content: {e}")
         return None
 
+def _bulk_fetch_granule_contents(mongo_contenu_ids):
+    """
+    Récupère le contenu de TOUS les granules en une seule requête MongoDB.
+    Évite le problème N+1 (1 requête par granule) qui rendait les gros cours inaccessibles.
+    
+    Args:
+        mongo_contenu_ids: liste de mongo_contenu_id (strings)
+    Returns:
+        dict: { mongo_contenu_id_str: document_dict }
+    """
+    if not mongo_contenu_ids:
+        return {}
+    
+    try:
+        mongo_db = get_mongo_db()
+        # Convertir en ObjectId, ignorer les invalides
+        valid_oids = []
+        for mid in mongo_contenu_ids:
+            if mid:
+                try:
+                    valid_oids.append(ObjectId(mid))
+                except Exception:
+                    pass
+        
+        if not valid_oids:
+            return {}
+        
+        # Une seule requête pour tout récupérer
+        cursor = mongo_db['granules'].find({"_id": {"$in": valid_oids}})
+        result = {}
+        for doc in cursor:
+            key = str(doc['_id'])
+            doc['_id'] = key
+            result[key] = doc
+        return result
+    except Exception as e:
+        print(f"❌ Erreur _bulk_fetch_granule_contents: {e}")
+        return {}
+
+
 def get_xccm_cours_structure(cours):
     """
     Génère la structure JSON stricte attendue par le FrontEnd et la plateforme XCCM.
     Va chercher les données intelligentes générées par le Chef d'Orchestre.
+    
+    OPTIMISÉ: Récupère tous les contenus MongoDB en une seule requête batch
+    au lieu d'une requête par granule (corrige le timeout sur les gros cours).
     """
     mongo_db = get_mongo_db()
     
@@ -85,57 +128,84 @@ def get_xccm_cours_structure(cours):
         "sections": []
     }
 
-    # 4. Arborescence
-    for partie in cours.parties.all().order_by('numero'):
+    # 4. OPTIMISATION: Pré-charger TOUS les granules du cours en une seule requête SQL
+    #    puis batch-fetch les contenus MongoDB en une seule requête.
+    all_granules = list(
+        Granule.objects.filter(
+            sous_section__section__chapitre__partie__cours=cours
+        ).select_related(
+            'sous_section__section__chapitre__partie'
+        ).order_by(
+            'sous_section__section__chapitre__partie__numero',
+            'sous_section__section__chapitre__numero',
+            'sous_section__section__numero',
+            'sous_section__numero',
+            'ordre'
+        )
+    )
+    
+    # Collecter tous les mongo_contenu_id et faire un seul fetch MongoDB
+    all_mongo_ids = [g.mongo_contenu_id for g in all_granules if g.mongo_contenu_id]
+    mongo_contents = _bulk_fetch_granule_contents(all_mongo_ids)
+    
+    # Index pour lookup rapide: granule_id -> granule ORM
+    # et index par sous_section_id pour éviter des requêtes supplémentaires
+    granules_by_ss = {}
+    for g in all_granules:
+        ss_id = g.sous_section_id
+        if ss_id not in granules_by_ss:
+            granules_by_ss[ss_id] = []
+        granules_by_ss[ss_id].append(g)
+
+    # 5. Arborescence (sans requêtes MongoDB supplémentaires)
+    for partie in cours.parties.all().order_by('numero').prefetch_related(
+        'chapitres__sections__sous_sections'
+    ):
         section_data = {
             "title": partie.titre,
             "introduction": f"Introduction de la section {partie.titre}.",
             "chapters": [],
-            "exercise": None
+            "exercise": []
         }
 
         for chapitre in partie.chapitres.all().order_by('numero'):
-            # Fallback UUID: premier granule réel du chapitre (si certaines sections n'ont aucun granule)
-            chapitre_granules = list(
-                Granule.objects.filter(
-                    sous_section__section__chapitre=chapitre
-                ).order_by(
-                    'sous_section__section__numero',
-                    'sous_section__numero',
-                    'ordre'
-                )
-            )
-            chapitre_fallback_granule_id = str(chapitre_granules[0].id) if chapitre_granules else None
+            # Fallback UUID: premier granule réel du chapitre
+            chapitre_fallback_granule_id = None
+            for section in chapitre.sections.all().order_by('numero'):
+                if chapitre_fallback_granule_id:
+                    break
+                for sous_section in section.sous_sections.all().order_by('numero'):
+                    gs = granules_by_ss.get(sous_section.pk, [])
+                    if gs:
+                        chapitre_fallback_granule_id = str(gs[0].id)
+                        break
 
             chapter_data = {
                 "title": chapitre.titre,
                 "introduction": f"Introduction du chapitre {chapitre.titre}.",
                 "paragraphs": [],
-                "exercise": None
+                "exercise": []
             }
 
             for section in chapitre.sections.all().order_by('numero'):
-                # IMPORTANT:
-                # On renvoie un "paragraph" par granule avec son UUID réel.
-                # Cela permet au frontend de tracer progression/commentaires/analytics sans IDs synthétiques.
                 section_paragraphs = []
 
                 if hasattr(section, 'sous_sections') and section.sous_sections.exists():
                     for sous_section in section.sous_sections.all().order_by('numero'):
-                        for granule in sous_section.granules.all().order_by('ordre'):
-                            gc = get_granule_content(granule.mongo_contenu_id) or {}
+                        for granule in granules_by_ss.get(sous_section.pk, []):
+                            gc = mongo_contents.get(granule.mongo_contenu_id, {}) if granule.mongo_contenu_id else {}
                             content_html = gc.get("html") or gc.get("html_content") or gc.get("content") or ""
                             section_paragraphs.append({
                                 "granule_id": str(granule.id),
                                 "title": granule.titre or section.titre,
                                 "introduction": "Contenu détaillé.",
                                 "content": content_html,
-                                "notions": ia_mots_cles,  # INJECTION IA des mots-clés dans les paragraphes
-                                "exercise": None
+                                "notions": ia_mots_cles,
+                                "exercise": []
                             })
                 elif hasattr(section, 'granules'):
                     for granule in section.granules.all().order_by('ordre'):
-                        gc = get_granule_content(granule.mongo_contenu_id) or {}
+                        gc = mongo_contents.get(granule.mongo_contenu_id, {}) if granule.mongo_contenu_id else {}
                         content_html = gc.get("html") or gc.get("html_content") or gc.get("content") or ""
                         section_paragraphs.append({
                             "granule_id": str(granule.id),
@@ -143,19 +213,18 @@ def get_xccm_cours_structure(cours):
                             "introduction": "Contenu détaillé.",
                             "content": content_html,
                             "notions": ia_mots_cles,
-                            "exercise": None
+                            "exercise": []
                         })
 
                 # Fallback: aucun granule trouvé -> garder un paragraphe vide pour ne pas casser l'UI
                 if not section_paragraphs:
                     section_paragraphs.append({
-                        # On injecte un UUID de fallback pour permettre tracking/commentaires partout.
                         "granule_id": chapitre_fallback_granule_id,
                         "title": section.titre,
                         "introduction": "Contenu détaillé.",
                         "content": "",
                         "notions": ia_mots_cles,
-                        "exercise": None
+                        "exercise": []
                     })
 
                 chapter_data["paragraphs"].extend(section_paragraphs)

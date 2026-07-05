@@ -36,48 +36,150 @@ def extract_structure_from_docx(file_path):
     return parse_html_to_json_structure(html)
 
 def extract_structure_from_pdf(file_path):
-    """Extraction PDF via PyMuPDF (Heuristiques)"""
+    """Extraction PDF via PyMuPDF - analyse statistique robuste des tailles de police"""
+    from collections import Counter, defaultdict
+    
     doc = fitz.open(file_path)
-    font_sizes = []
+    total_pages = len(doc)
     
-    # 1. Détection des tailles de police
-    for page in doc:
+    # ──────────────────────────────────────────────────────────────────────
+    # PASSE 1 : Collecter toutes les lignes avec métadonnées
+    # ──────────────────────────────────────────────────────────────────────
+    all_lines = []  # (page_idx, max_size, is_bold, text)
+    
+    for page_idx, page in enumerate(doc):
         blocks = page.get_text("dict")["blocks"]
         for b in blocks:
-            if "lines" in b:
-                for l in b["lines"]:
-                    for s in l["spans"]:
-                        if s["text"].strip():
-                            font_sizes.append(round(s["size"], 1))
-                            
-    if not font_sizes:
-        return parse_html_to_json_structure("<html><body><p>Document Vide</p></body></html>")
-        
-    from collections import Counter
-    size_distribution = Counter(font_sizes)
-    body_font_size = size_distribution.most_common(1)[0][0]
-    
-    # 2. Reconstruction HTML basée sur les polices
-    html_parts = ""
-    for page in doc:
-        blocks = page.get_text("dict")["blocks"]
-        for b in blocks:
-            if "lines" in b:
-                for l in b["lines"]:
-                    for s in l["spans"]:
-                        text = s["text"].strip()
+            if "lines" not in b:
+                continue
+            for line in b["lines"]:
+                line_text = ""
+                max_size = 0
+                is_bold = False
+                for s in line["spans"]:
+                    span_text = s["text"]
+                    if span_text.strip():
+                        line_text += span_text
                         size = round(s["size"], 1)
-                        if not text: continue
-                        
-                        if size > body_font_size + 4:
-                            html_parts += f"<h1>{text}</h1>"
-                        elif size > body_font_size + 2:
-                            html_parts += f"<h2>{text}</h2>"
-                        elif size > body_font_size:
-                            html_parts += f"<h3>{text}</h3>"
-                        else:
-                            html_parts += f"<p>{text}</p>"
+                        if size > max_size:
+                            max_size = size
+                        if s.get("flags", 0) & 16:
+                            is_bold = True
+                
+                line_text = line_text.strip()
+                if not line_text:
+                    continue
+                # Ignorer numéros de page et lignes minuscules
+                if len(line_text) < 3 and line_text.isdigit():
+                    continue
+                    
+                all_lines.append((page_idx, max_size, is_bold, line_text))
+    
+    if not all_lines:
+        doc.close()
+        return parse_html_to_json_structure("<html><body><p>Document Vide</p></body></html>")
+    
+    # ──────────────────────────────────────────────────────────────────────
+    # PASSE 2 : Analyse statistique des tailles
+    # ──────────────────────────────────────────────────────────────────────
+    size_counts = Counter(s for _, s, _, _ in all_lines)
+    body_font_size = size_counts.most_common(1)[0][0]
+    
+    # Seuils basés sur des RATIOS — bien plus robustes que des offsets fixes
+    h1_threshold = body_font_size * 1.8    # ex: 12pt → 21.6pt  (titres majeurs)
+    h2_threshold = body_font_size * 1.15   # ex: 12pt → 13.8pt  (sous-titres)
+    footer_threshold = body_font_size * 0.85  # ex: 12pt → 10.2pt (en-têtes/pieds)
+    
+    # Identifier les tailles "rares + très grandes" = bruit de page de couverture
+    # Une taille est considérée comme bruit si elle apparaît < 4 fois ET est > h1_threshold
+    # ET ces occurrences sont concentrées dans les 2 premières pages
+    cover_noise_sizes = set()
+    for sz, count in size_counts.items():
+        if sz > h1_threshold and count < 5:
+            # Vérifier si concentré en début de document
+            pages_with_this_size = set(p for p, s, _, _ in all_lines if s == sz)
+            if max(pages_with_this_size) <= 1:  # Uniquement pages 0-1
+                cover_noise_sizes.add(sz)
+    
+    print(f"📊 Analyse PDF : corps={body_font_size}pt, h1>={h1_threshold:.1f}pt, h2>={h2_threshold:.1f}pt")
+    print(f"   Distribution top5: {size_counts.most_common(5)}")
+    if cover_noise_sizes:
+        print(f"   Tailles couverture filtrées: {cover_noise_sizes}")
+    
+    # ──────────────────────────────────────────────────────────────────────
+    # PASSE 3 : Classification intelligente
+    # ──────────────────────────────────────────────────────────────────────
+    classified_lines = []
+    
+    for page_idx, max_size, is_bold, line_text in all_lines:
+        # Filtrer les en-têtes/pieds de page (petite taille récurrente)
+        if max_size < footer_threshold:
+            continue
+        
+        # Filtrer le bruit de page de couverture
+        if max_size in cover_noise_sizes:
+            continue
+        
+        # Heuristiques anti-faux-titres
+        is_likely_not_header = (
+            len(line_text) < 5 or
+            line_text.isdigit() or
+            line_text.strip().endswith(('.', ':', '!', '?', ';')) or
+            line_text.lower().startswith(('page ', 'figure ', 'table ', 'note :', 'source '))
+        )
+        
+        if is_likely_not_header:
+            classified_lines.append(("p", line_text))
+            continue
+            
+        # Classification par ratio de taille
+        if max_size >= h1_threshold:
+            classified_lines.append(("h1", line_text))
+        elif max_size >= h2_threshold and (is_bold or max_size > body_font_size + 1.5):
+            classified_lines.append(("h2", line_text))
+        elif is_bold and max_size > body_font_size:
+            classified_lines.append(("h3", line_text))
+        else:
+            classified_lines.append(("p", line_text))
+    
     doc.close()
+    
+    # ──────────────────────────────────────────────────────────────────────
+    # PASSE 4 : Fusion des paragraphes consécutifs + multi-ligne h1
+    # ──────────────────────────────────────────────────────────────────────
+    # Si 2 h1 consécutifs, on les fusionne (titre réparti sur 2 lignes PDF)
+    merged_lines = []
+    for tag, text in classified_lines:
+        if merged_lines and tag == "h1" and merged_lines[-1][0] == "h1":
+            prev_tag, prev_text = merged_lines[-1]
+            merged_lines[-1] = ("h1", prev_text + " " + text)
+        elif merged_lines and tag == "h2" and merged_lines[-1][0] == "h2":
+            prev_tag, prev_text = merged_lines[-1]
+            merged_lines[-1] = ("h2", prev_text + " " + text)
+        else:
+            merged_lines.append((tag, text))
+    
+    # Construction HTML avec fusion des paragraphes consécutifs
+    html_parts = ""
+    current_paragraph_lines = []
+    
+    for tag, text in merged_lines:
+        if tag == "p":
+            current_paragraph_lines.append(text)
+        else:
+            if current_paragraph_lines:
+                merged = " ".join(current_paragraph_lines)
+                html_parts += f"<p>{merged}</p>\n"
+                current_paragraph_lines = []
+            html_parts += f"<{tag}>{text}</{tag}>\n"
+    
+    if current_paragraph_lines:
+        merged = " ".join(current_paragraph_lines)
+        html_parts += f"<p>{merged}</p>\n"
+    
+    # Compter les résultats
+    tag_counts = Counter(t for t, _ in merged_lines)
+    print(f"📊 PDF structuré : {tag_counts.get('h1',0)} chapitres, {tag_counts.get('h2',0)} sections, {tag_counts.get('p',0)} paragraphes")
     return parse_html_to_json_structure(f"<html><body>{html_parts}</body></html>")
 
 def extract_structure_from_txt(file_path):
@@ -91,16 +193,39 @@ def parse_html_to_json_structure(html_content):
     soup = BeautifulSoup(html_content, 'html.parser')
     structure = {"sections": []}
     
-    # Logique simplifiée de création d'arbre JSON depuis le HTML
-    for tag in soup.find_all(['h1', 'h2', 'h3', 'p', 'ul', 'ol']):
+    current_h1 = None
+    current_h2 = None
+    
+    for tag in soup.find_all(['h1', 'h2', 'h3', 'p', 'ul', 'ol', 'div']):
+        text = tag.get_text(strip=True)
+        if not text:
+            continue
+            
         node = {
             "type": tag.name,
-            "content": tag.get_text(strip=True),
+            "content": text,
             "html": str(tag),
             "children": []
         }
-        structure["sections"].append(node)
         
+        if tag.name == 'h1':
+            structure["sections"].append(node)
+            current_h1 = node
+            current_h2 = None
+        elif tag.name == 'h2':
+            if current_h1:
+                current_h1["children"].append(node)
+            else:
+                structure["sections"].append(node)
+            current_h2 = node
+        else:
+            if current_h2:
+                current_h2["children"].append(node)
+            elif current_h1:
+                current_h1["children"].append(node)
+            else:
+                structure["sections"].append(node)
+                
     return structure
 
 def extract_images_from_pdf(fichier_source_instance):
@@ -121,35 +246,94 @@ def extract_images_from_pdf(fichier_source_instance):
         print(f"Erreur extraction image : {e}")
         return 0
 
-def split_and_create_granules(fichier_source, json_structure):
-    """Crée les entrées MySQL et MongoDB (Granules)"""
-    with transaction.atomic():
-        cours, _ = Cours.objects.get_or_create(
-            titre=fichier_source.titre,
-            enseignant=fichier_source.enseignant
+def process_json_node(node, fichier_source, granules_col, partie, chapitre, section, sous_section, counters):
+    node_type = node.get("type")
+    content = node.get("content", "")
+    children = node.get("children", [])
+    
+    if node_type == 'h1':
+        counters['chapitre'] += 1
+        chapitre = Chapitre.objects.create(partie=partie, titre=content[:190] or "Chapitre", numero=counters['chapitre'])
+        section = Section.objects.create(chapitre=chapitre, titre="Début", numero=1)
+        sous_section = SousSection.objects.create(section=section, titre="Contenu", numero=1)
+        counters['section'] = 1
+        for child in children:
+            process_json_node(child, fichier_source, granules_col, partie, chapitre, section, sous_section, counters)
+            
+    elif node_type == 'h2':
+        counters['section'] += 1
+        section = Section.objects.create(chapitre=chapitre, titre=content[:190] or "Section", numero=counters['section'])
+        sous_section = SousSection.objects.create(section=section, titre="Contenu", numero=1)
+        for child in children:
+            process_json_node(child, fichier_source, granules_col, partie, chapitre, section, sous_section, counters)
+            
+    else:
+        # Stockage MongoDB (JSON pur)
+        res = granules_col.insert_one({
+            "fichier_source_id": str(fichier_source.id),
+            "html": node.get("html", ""),
+            "content": content,
+            "type": node_type
+        })
+        
+        # Stockage MySQL (métadonnées)
+        Granule.objects.create(
+            sous_section=sous_section,
+            fichier_source=fichier_source,
+            titre=(content[:45] + "...") if len(content) > 45 else (content or "Granule"),
+            type_contenu="TEXTE",
+            mongo_contenu_id=str(res.inserted_id),
+            ordre=counters['granule']
         )
-        # Votre logique complexe de création (Partie, Chapitre, Section, Granule)
-        # reste inchangée ici. Pour l'exemple complet, on crée un Granule global.
+        counters['granule'] += 1
+
+def split_and_create_granules(fichier_source, json_structure):
+    """Crée les entrées MySQL et MongoDB (Granules) avec structuration hiérarchique"""
+    with transaction.atomic():
+        matiere = fichier_source.matiere
+
+        cours, created = Cours.objects.get_or_create(
+            titre=fichier_source.titre,
+            enseignant=fichier_source.enseignant,
+            defaults={
+                'matiere': matiere,
+                'description': f"Cours généré depuis {fichier_source.titre}",
+                'est_publie': True,
+            }
+        )
+
+        if not created and matiere and cours.matiere != matiere:
+            cours.matiere = matiere
+            cours.save(update_fields=['matiere'])
+
+        if created:
+            print(f"✅ Nouveau cours créé : {cours.titre}" + (f" dans {matiere.titre}" if matiere else " (sans matière)"))
+        else:
+            print(f"♻️  Mise à jour du cours existant : {cours.titre}")
+
+        # Nettoyage des anciennes données
+        Granule.objects.filter(fichier_source=fichier_source).delete()
+        Partie.objects.filter(cours=cours).delete()
+
         mongo_db = get_mongo_db()
-        for i, section in enumerate(json_structure.get("sections", [])):
-            partie, _ = Partie.objects.get_or_create(cours=cours, titre=f"Partie {i+1}", numero=i+1)
-            chapitre, _ = Chapitre.objects.get_or_create(partie=partie, titre="Contenu", numero=1)
-            sec, _ = Section.objects.get_or_create(chapitre=chapitre, titre=section.get("content", "Section")[:50], numero=1)
-            
-            mongo_id = mongo_db['granules'].insert_one({
-                "fichier_source_id": str(fichier_source.id),
-                "html": section.get("html", ""),
-                "content": section.get("content", ""),
-                "type": section.get("type", "p")
-            }).inserted_id
-            
-            Granule.objects.create(
-                section=sec,
-                titre=section.get("content", "Granule")[:50],
-                type_contenu="TEXTE",
-                mongo_contenu_id=str(mongo_id),
-                ordre=i
-            )
+        granules_col = mongo_db['granules']
+        # Nettoyage MongoDB : sans ça, chaque retraitement (retry, ré-upload) laisse des
+        # documents orphelins qui ne correspondent plus à aucun Granule MySQL. Ça pollue
+        # silencieusement la recherche de contenu (GranuleSearchView) au fil des reprocessings.
+        granules_col.delete_many({"fichier_source_id": str(fichier_source.id)})
+
+        # Racine
+        partie = Partie.objects.create(cours=cours, titre="Contenu Principal", numero=1)
+        chapitre = Chapitre.objects.create(partie=partie, titre="Introduction", numero=1)
+        section = Section.objects.create(chapitre=chapitre, titre="Généralités", numero=1)
+        sous_section = SousSection.objects.create(section=section, titre="Contenu", numero=1)
+        
+        counters = {'chapitre': 1, 'section': 1, 'granule': 1}
+
+        # Parcours de la structure
+        for node in json_structure.get("sections", []):
+            process_json_node(node, fichier_source, granules_col, partie, chapitre, section, sous_section, counters)
+
         return cours
 
 # ==============================================================================
@@ -220,10 +404,6 @@ def process_and_store_document(fichier_source_instance):
             fichier_source_instance.statut_traitement = 'ERREUR'
             fichier_source_instance.save()
         return False, f"Erreur: {str(e)}"
-
-
-
-
 
 
 

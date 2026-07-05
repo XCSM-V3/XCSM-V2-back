@@ -7,8 +7,31 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from .models import Commentaire, Granule, Cours, Notification
 from .serializers import CommentSerializer, CommentReplySerializer, NotificationSerializer
+from .permissions import IsCommentAuthorOrCourseTeacher, is_teacher_of_cours
 from django.db.models import Count
 from django.db.models import Q
+
+
+def _actor_role(user):
+    return 'enseignant' if hasattr(user, 'profil_enseignant') else 'etudiant'
+
+
+def _notify_course_teachers(cours, exclude_user, **notif_kwargs):
+    """Notifie le propriétaire du cours + le propriétaire de la matière + tous les co-enseignants (sans doublon)."""
+    destinataires = {}
+    if cours.enseignant:
+        destinataires[cours.enseignant.utilisateur_id] = cours.enseignant.utilisateur
+    if cours.matiere:
+        if cours.matiere.enseignant:
+            destinataires[cours.matiere.enseignant.utilisateur_id] = cours.matiere.enseignant.utilisateur
+        for co_ens in cours.matiere.enseignants.all():
+            destinataires[co_ens.utilisateur_id] = co_ens.utilisateur
+
+    destinataires.pop(exclude_user.id, None)
+
+    for utilisateur in destinataires.values():
+        Notification.objects.create(destinataire=utilisateur, **notif_kwargs)
+
 
 class CommentaireViewSet(viewsets.ModelViewSet):
     """
@@ -17,10 +40,15 @@ class CommentaireViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     serializer_class = CommentSerializer
 
+    def get_permissions(self):
+        if self.action in ('update', 'partial_update', 'destroy'):
+            return [IsAuthenticated(), IsCommentAuthorOrCourseTeacher()]
+        return [IsAuthenticated()]
+
     def get_queryset(self):
         # On ne renvoie que les commentaires principaux (pas les réponses imbriquées)
         queryset = Commentaire.objects.filter(parent__isnull=True).select_related('auteur', 'granule', 'cours')
-        
+
         granule_id = self.request.query_params.get('granule_id')
         course_id = self.request.query_params.get('course_id')
         type_filtre = self.request.query_params.get('type')
@@ -32,6 +60,17 @@ class CommentaireViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(cours_id=course_id)
         if type_filtre and type_filtre != 'all':
             queryset = queryset.filter(type_commentaire=type_filtre)
+
+        # Visibilité : les commentaires en attente/rejetés ne sont visibles que par
+        # leur auteur ou l'enseignant (propriétaire/co-enseignant) du cours concerné.
+        user = self.request.user
+        queryset = queryset.filter(
+            Q(statut='approved') |
+            Q(auteur=user) |
+            Q(cours__enseignant__utilisateur=user) |
+            Q(cours__matiere__enseignant__utilisateur=user) |
+            Q(cours__matiere__enseignants__utilisateur=user)
+        ).distinct()
 
         # Tri : Pinned d'abord, puis selon le paramètre
         if sort == 'top':
@@ -121,17 +160,19 @@ class CommentaireViewSet(viewsets.ModelViewSet):
                 contenu=data.get('content'),
                 statut=statut
             )
-            
-            # ── NOUVEAU: Notification pour l'enseignant propriétaire du cours ──
-            if cours.enseignant and cours.enseignant.utilisateur != request.user:
-                Notification.objects.create(
-                    destinataire=cours.enseignant.utilisateur,
-                    type_notif='comment',
-                    title="Nouveau commentaire" if type_c == 'comment' else f"Nouvelle {type_c}",
-                    message=f"{request.user.first_name} a laissé un {type_c} sur votre cours '{cours.titre}'.",
-                    actor_name=f"{request.user.first_name} {request.user.last_name}"
-                )
-            
+
+            # ── Notification pour l'enseignant propriétaire du cours + co-enseignants ──
+            _notify_course_teachers(
+                cours,
+                exclude_user=request.user,
+                type_notif='new_comment',
+                title="Nouveau commentaire" if type_c == 'comment' else f"Nouvelle {type_c}",
+                message=f"{request.user.first_name} a laissé un {type_c} sur votre cours '{cours.titre}'.",
+                link=f"/dashboard/commentaires?course_id={cours.id}",
+                actor_name=f"{request.user.first_name} {request.user.last_name}",
+                actor_role=_actor_role(request.user),
+            )
+
             serializer = self.get_serializer(commentaire)
             return Response({"comment": serializer.data}, status=status.HTTP_201_CREATED)
             
@@ -147,10 +188,21 @@ class CommentaireViewSet(viewsets.ModelViewSet):
         commentaire = self.get_object()
         vote = request.data.get('vote')
         user = request.user
+        already_upvoted = commentaire.upvotes.filter(pk=user.pk).exists()
 
         if vote == 'up':
             commentaire.downvotes.remove(user)
             commentaire.upvotes.add(user)
+            if not already_upvoted and commentaire.auteur_id != user.id:
+                Notification.objects.create(
+                    destinataire=commentaire.auteur,
+                    type_notif='upvote',
+                    title="Vote positif",
+                    message=f"{user.first_name} a trouvé votre {commentaire.type_commentaire} utile.",
+                    link=f"/cours/{commentaire.cours_id}/lecture?granule={commentaire.granule_id}",
+                    actor_name=f"{user.first_name} {user.last_name}",
+                    actor_role=_actor_role(user),
+                )
         elif vote == 'down':
             commentaire.upvotes.remove(user)
             commentaire.downvotes.add(user)
@@ -172,7 +224,7 @@ class CommentaireViewSet(viewsets.ModelViewSet):
         Body: {"content": "..."}
         """
         parent = self.get_object()
-        
+
         reply = Commentaire.objects.create(
             auteur=request.user,
             granule=parent.granule,
@@ -182,24 +234,52 @@ class CommentaireViewSet(viewsets.ModelViewSet):
             type_commentaire='comment',
             statut='approved'
         )
-        
+
         # Création d'une notification pour l'auteur du commentaire parent
-        if parent.auteur != request.user:
+        if parent.auteur_id != request.user.id:
             Notification.objects.create(
                 destinataire=parent.auteur,
                 type_notif='reply',
                 title="Nouvelle réponse",
                 message=f"{request.user.first_name} a répondu à votre {parent.type_commentaire}.",
-                actor_name=f"{request.user.first_name} {request.user.last_name}"
+                link=f"/cours/{parent.cours_id}/lecture?granule={parent.granule_id}",
+                actor_name=f"{request.user.first_name} {request.user.last_name}",
+                actor_role=_actor_role(request.user),
             )
-            
+
         serializer = CommentReplySerializer(reply, context={'request': request})
         return Response({"reply": serializer.data}, status=status.HTTP_201_CREATED)
+
+    def perform_update(self, serializer):
+        """Notifie l'auteur d'une suggestion/correction quand un enseignant approuve ou rejette."""
+        old_statut = serializer.instance.statut
+        instance = serializer.save()
+
+        if (
+            old_statut != instance.statut
+            and instance.statut in ('approved', 'rejected')
+            and instance.type_commentaire in ('suggestion', 'correction')
+            and instance.auteur_id != self.request.user.id
+        ):
+            if instance.statut == 'approved':
+                type_notif, title, verbe = 'suggestion_approved', "Suggestion approuvée ✓", "approuvée"
+            else:
+                type_notif, title, verbe = 'suggestion_rejected', "Suggestion rejetée", "rejetée"
+
+            Notification.objects.create(
+                destinataire=instance.auteur,
+                type_notif=type_notif,
+                title=title,
+                message=f"Votre {instance.type_commentaire} sur '{instance.cours.titre}' a été {verbe} par l'enseignant.",
+                link=f"/cours/{instance.cours_id}/lecture?granule={instance.granule_id}",
+                actor_name=f"{self.request.user.first_name} {self.request.user.last_name}",
+                actor_role=_actor_role(self.request.user),
+            )
 
 
 class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
     """
-    Gère les routes /api/v1/notifications/ appelées par useNotifications.ts
+    Gère les routes /api/v1/notifications/ appelées par NotificationsBell.tsx
     """
     permission_classes = [IsAuthenticated]
     serializer_class = NotificationSerializer
@@ -211,15 +291,14 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
         queryset = self.get_queryset()
         serializer = self.get_serializer(queryset[:50], many=True) # Max 50 notifs
         unread_count = queryset.filter(is_read=False).count()
-        
+
         return Response({
             "notifications": serializer.data,
             "unread_count": unread_count
         })
 
-    def partial_update(self, request, *args, **kwargs):
-        """Utilisé par markAllRead dans useNotifications.ts (appel sans ID)"""
-        if not kwargs.get('pk'):
-            self.get_queryset().filter(is_read=False).update(is_read=True)
-            return Response({"success": True})
-        return super().partial_update(request, *args, **kwargs)
+    @action(detail=False, methods=['patch'], url_path='mark-all-read')
+    def mark_all_read(self, request):
+        """PATCH /api/v1/notifications/mark-all-read/"""
+        updated = self.get_queryset().filter(is_read=False).update(is_read=True)
+        return Response({"success": True, "marked_read": updated})

@@ -14,9 +14,8 @@ Tâches principales:
 4. extract_images_from_pdf_task: Extraction d'images (non-bloquant)
 """
 
-from celery import shared_task
-from celery.result import allow_join_result
-from .models import FichierSource
+from celery import shared_task, chain
+from .models import FichierSource, Notification
 from .processing import (
     extract_structure_from_pdf,
     extract_structure_from_docx,
@@ -32,6 +31,23 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
+def _mark_fichier_erreur(fichier_id):
+    """Marque le document en erreur. Utilisé quand une étape de la chaîne échoue définitivement."""
+    try:
+        fichier = FichierSource.objects.get(id=fichier_id)
+        fichier.statut_traitement = 'ERREUR'
+        fichier.save(update_fields=['statut_traitement'])
+        Notification.objects.create(
+            destinataire=fichier.enseignant.utilisateur,
+            type_notif='document_erreur',
+            title="Échec du traitement ❌",
+            message=f"Le document '{fichier.titre}' n'a pas pu être découpé.",
+            link=f"/dashboard/matieres/{fichier.matiere_id}" if fichier.matiere_id else None,
+        )
+    except Exception:
+        pass
+
+
 # ==============================================================================
 # TÂCHE 1: ORCHESTRATEUR PRINCIPAL
 # ==============================================================================
@@ -39,99 +55,55 @@ logger = logging.getLogger(__name__)
 @shared_task(bind=True, max_retries=3)
 def process_document_task(self, fichier_id):
     """
-    Tâche principale pour traiter un document uploadé de manière asynchrone.
+    Point d'entrée du traitement asynchrone d'un document.
+
+    Ne bloque JAMAIS sur le résultat des sous-tâches : avec un pool prefork de
+    concurrence N, un `.get()` synchrone sur une sous-tâche depuis une tâche déjà
+    en cours d'exécution consomme un 2e slot de worker pour l'attente. Dès que N
+    documents sont traités en même temps, tous les slots finissent occupés par des
+    tâches parentes qui attendent, et plus aucun worker n'est libre pour exécuter
+    les sous-tâches attendues : deadlock permanent (observé le 2026-07-04 avec
+    concurrency=2 et 2 uploads simultanés). On utilise donc une chaîne Celery
+    (`chain`) : chaque étape est mise en file et exécutée par n'importe quel
+    worker libre, sans jamais bloquer le worker qui a lancé la chaîne.
     """
     try:
         logger.info(f"🚀 [Task {self.request.id}] Démarrage traitement fichier {fichier_id}")
         fichier = FichierSource.objects.get(id=fichier_id)
-        
-        with ProcessingLogger(fichier, 'COMPLETE', self.request.id) as proc_log:
-            fichier.statut_traitement = 'EN_COURS'
-            fichier.save()
-            
-            file_path = fichier.fichier_original.path
-            ext = file_path.split('.')[-1].lower()
 
-            logger.info(f"📄 [Task {self.request.id}] Fichier: {fichier.titre} (Type: {ext})")
-            
-            # ÉTAPE 2: Extraction d'images
-            if ext == 'pdf':
-                logger.info(f"🖼️ [Task {self.request.id}] Lancement extraction d'images...")
-                try:
-                    extract_images_from_pdf_task.delay(fichier_id)
-                except Exception as img_error:
-                    logger.warning(f"⚠️ [Task {self.request.id}] Échec extraction images: {img_error}")
+        fichier.statut_traitement = 'EN_COURS'
+        fichier.save(update_fields=['statut_traitement'])
 
-            # ÉTAPE 3: Extraction de texte + Enrichissement IA
-            logger.info(f"📝 [Task {self.request.id}] Extraction de texte et analyse IA...")
-            extraction_result = extract_text_from_document_task.apply_async(
-                args=[fichier_id],
-                retry=True,
-                retry_policy={
-                    'max_retries': 3,
-                    'interval_start': 60,
-                    'interval_step': 60,
-                    'interval_max': 600,
-                }
-            )
-            
-            with allow_join_result():
-                json_structure = extraction_result.get(timeout=400)  # Délai augmenté pour laisser le temps à l'IA
-            
-            if not json_structure:
-                raise ValueError("Extraction de texte a retourné une structure vide")
-            
-            # ÉTAPE 4: Génération de granules
-            logger.info(f"🔨 [Task {self.request.id}] Génération de granules...")
-            granules_result = generate_granules_task.apply_async(
-                args=[fichier_id, json_structure],
-                retry=True,
-                retry_policy={
-                    'max_retries': 3,
-                    'interval_start': 60,
-                    'interval_step': 60,
-                    'interval_max': 600,
-                }
-            )
-            
-            with allow_join_result():
-                cours_info = granules_result.get(timeout=600)
-            
-            # ÉTAPE 5: Finalisation
-            fichier.statut_traitement = 'TRAITE'
-            fichier.save()
-            
-            proc_log.set_result({
-                'cours_id': cours_info['cours_id'],
-                'cours_titre': cours_info['cours_titre'],
-                'granules_count': cours_info['granules_count']
-            })
-            
-            logger.info(f"✅ [Task {self.request.id}] Traitement terminé avec succès: {fichier.titre}")
-            return {
-                "success": True,
-                "message": f"Traitement réussi: {cours_info['cours_titre']}",
-                "cours_id": cours_info['cours_id'],
-                "granules_count": cours_info['granules_count']
-            }
-        
+        file_path = fichier.fichier_original.path
+        ext = file_path.split('.')[-1].lower()
+        logger.info(f"📄 [Task {self.request.id}] Fichier: {fichier.titre} (Type: {ext})")
+
+        # Extraction d'images : indépendante, on ne l'attend pas
+        if ext == 'pdf':
+            logger.info(f"🖼️ [Task {self.request.id}] Lancement extraction d'images...")
+            try:
+                extract_images_from_pdf_task.delay(fichier_id)
+            except Exception as img_error:
+                logger.warning(f"⚠️ [Task {self.request.id}] Échec extraction images: {img_error}")
+
+        # Extraction de texte + IA, puis génération des granules, puis finalisation.
+        # Chaque étape gère elle-même le statut ERREUR si elle échoue définitivement.
+        logger.info(f"📝 [Task {self.request.id}] Lancement de la chaîne extraction → granules...")
+        chain(
+            extract_text_from_document_task.s(fichier_id),
+            generate_granules_task.s(fichier_id),
+            finalize_document_task.s(fichier_id),
+        ).apply_async()
+
+        return {"success": True, "message": "Traitement lancé en arrière-plan"}
+
     except FichierSource.DoesNotExist:
         logger.error(f"❌ [Task {self.request.id}] Fichier introuvable: {fichier_id}")
         return {"success": False, "message": "Fichier introuvable"}
-        
+
     except Exception as exc:
-        logger.error(f"❌ [Task {self.request.id}] Erreur: {exc}", exc_info=True)
-        try:
-            fichier = FichierSource.objects.get(id=fichier_id)
-            fichier.statut_traitement = 'ERREUR'
-            fichier.save()
-        except Exception:
-            pass
-        
-        if self.request.retries < self.max_retries:
-            retry_in = 60 * (2 ** self.request.retries)
-            logger.warning(f"🔄 [Task {self.request.id}] Retry {self.request.retries + 1}/{self.max_retries} dans {retry_in}s")
-            raise self.retry(exc=exc, countdown=retry_in)
+        logger.error(f"❌ [Task {self.request.id}] Erreur au lancement: {exc}", exc_info=True)
+        _mark_fichier_erreur(fichier_id)
         return {"success": False, "message": f"Erreur: {str(exc)}"}
 
 
@@ -190,6 +162,7 @@ def extract_text_from_document_task(self, fichier_id):
             retry_in = 60 * (2 ** self.request.retries)
             logger.warning(f"🔄 [Extract Task {self.request.id}] Retry dans {retry_in}s")
             raise self.retry(exc=exc, countdown=retry_in)
+        _mark_fichier_erreur(fichier_id)
         raise
 
 
@@ -198,9 +171,11 @@ def extract_text_from_document_task(self, fichier_id):
 # ==============================================================================
 
 @shared_task(bind=True, max_retries=3)
-def generate_granules_task(self, fichier_id, json_structure):
+def generate_granules_task(self, json_structure, fichier_id):
     """
     Sauvegarde la structure intelligente dans MongoDB et génère la hiérarchie MySQL.
+    Reçoit `json_structure` en 1er argument car chaînée après `extract_text_from_document_task`
+    (Celery injecte le résultat de la tâche précédente en tête des arguments de la chaîne).
     """
     try:
         logger.info(f"🔨 [Granule Task {self.request.id}] Début génération pour {fichier_id}")
@@ -255,7 +230,37 @@ def generate_granules_task(self, fichier_id, json_structure):
             retry_in = 60 * (2 ** self.request.retries)
             logger.warning(f"🔄 [Granule Task {self.request.id}] Retry dans {retry_in}s")
             raise self.retry(exc=exc, countdown=retry_in)
+        _mark_fichier_erreur(fichier_id)
         raise
+
+
+# ==============================================================================
+# TÂCHE 3bis: FINALISATION (dernier maillon de la chaîne)
+# ==============================================================================
+
+@shared_task(bind=True)
+def finalize_document_task(self, cours_info, fichier_id):
+    """
+    Marque le document comme traité une fois la chaîne extraction -> granules terminée.
+    Reçoit `cours_info` (résultat de generate_granules_task) en 1er argument, injecté par la chaîne.
+    """
+    fichier = FichierSource.objects.get(id=fichier_id)
+    fichier.statut_traitement = 'TRAITE'
+    fichier.save(update_fields=['statut_traitement'])
+    Notification.objects.create(
+        destinataire=fichier.enseignant.utilisateur,
+        type_notif='document_traite',
+        title="Découpage terminé ✅",
+        message=f"Le document '{fichier.titre}' a été analysé et découpé avec succès.",
+        link=f"/dashboard/matieres/{fichier.matiere_id}" if fichier.matiere_id else None,
+    )
+    logger.info(f"✅ [Task {self.request.id}] Traitement terminé avec succès: {fichier.titre}")
+    return {
+        "success": True,
+        "message": f"Traitement réussi: {cours_info['cours_titre']}",
+        "cours_id": cours_info['cours_id'],
+        "granules_count": cours_info['granules_count'],
+    }
 
 
 # ==============================================================================

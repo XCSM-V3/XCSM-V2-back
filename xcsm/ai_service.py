@@ -4,6 +4,7 @@
 import json
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +34,10 @@ def setup_gemini():
         logger.error("⚠️ GEMINI_API_KEY manquante dans l'environnement !")
         return None
     genai.configure(api_key=api_key)
-    # On utilise gemini-1.5-flash pour sa rapidité et son grand contexte
-    return genai.GenerativeModel('gemini-1.5-flash')
+    # gemini-1.5-flash a été retiré de l'API (modèle introuvable). On utilise
+    # l'alias "latest" du modèle flash le plus rapide, pour ne pas se recasser
+    # la figure à chaque dépréciation de version datée.
+    return genai.GenerativeModel('gemini-flash-latest')
 
 # ==============================================================================
 # MODULE 1: ASSISTANT IA CONVERSATIONNEL (CHAT)
@@ -98,62 +101,78 @@ def chat_with_context_stream(cours, message_utilisateur, historique_chat=None):
 
 
 # ==============================================================================
-# MODULE 2: LE CHEF D'ORCHESTRE SÉMANTIQUE
+# MODULE 2: LE CHEF D'ORCHESTRE SÉMANTIQUE (Gemini)
 # ==============================================================================
 
 def apply_semantic_orchestrator(json_structure):
     """
     Intercepte le JSON généré par le moteur de parsing heuristique,
-    et l'enrichit sémantiquement via l'IA SANS modifier la structure textuelle originale.
+    et l'enrichit sémantiquement via Gemini SANS modifier la structure textuelle originale.
     Ces données amélioreront le rendu visuel et structurel côté FrontEnd.
     """
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        logger.warning("⚠️ Clé API non trouvée. L'orchestration sémantique IA est ignorée.")
+    model = setup_gemini()
+    if not model:
+        logger.warning("⚠️ GEMINI_API_KEY manquante. L'orchestration sémantique IA est ignorée.")
         return json_structure
 
     try:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
-        
-        logger.info("🧠 Chef d'orchestre: Analyse et enrichissement du document...")
-        
+        logger.info("🧠 Chef d'orchestre Gemini: Analyse et enrichissement du document...")
+
         # Extraction d'un échantillon pour éviter de dépasser la limite de tokens
         texte_echantillon = json.dumps(json_structure, ensure_ascii=False)[:6000]
-        
+
         prompt = f"""
         Tu es un expert pédagogique IA. Voici un extrait d'un document de cours sous format JSON brut.
-        Ta mission est d'analyser ce contenu et de générer des métadonnées pédagogiques de haute qualité 
+        Ta mission est d'analyser ce contenu et de générer des métadonnées pédagogiques de haute qualité
         pour améliorer l'affichage FrontEnd.
-        
-        Génère UNIQUEMENT un objet JSON valide avec cette structure stricte :
+
+        Réponds UNIQUEMENT avec un objet JSON valide, sans markdown, sans balises, avec cette structure stricte :
         {{
             "ia_introduction": "Un résumé pédagogique, clair et engageant de ce cours (environ 3 à 4 phrases).",
             "ia_conclusion": "Une brève conclusion ou synthèse de ce qui est censé être retenu.",
             "ia_objectifs": ["Objectif d'apprentissage 1", "Objectif d'apprentissage 2", "Objectif d'apprentissage 3"],
             "ia_mots_cles": ["notion_1", "notion_2", "notion_3", "notion_4"]
         }}
-        
+
         Extrait du cours :
         {texte_echantillon}
         """
-        
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": prompt}],
-            response_format={"type": "json_object"}
+
+        # Le SDK Gemini peut rester bloqué indéfiniment si la résolution DNS/connexion
+        # réseau est bloquée (le timeout `request_options` ne couvre pas cette phase).
+        # On force donc une limite dure via un thread séparé pour ne jamais bloquer
+        # le worker gunicorn au-delà de quelques secondes. shutdown(wait=False) : on
+        # n'attend pas ce thread s'il reste bloqué, on l'abandonne.
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(
+            model.generate_content, prompt, request_options={"timeout": 30}
         )
-        
-        metadonnees_ia = json.loads(response.choices[0].message.content)
-        
+        try:
+            response = future.result(timeout=30)
+        except FutureTimeoutError:
+            logger.warning("⏱️ Gemini n'a pas répondu à temps (30s). Orchestration ignorée.")
+            executor.shutdown(wait=False)
+            return json_structure
+        executor.shutdown(wait=False)
+
+        # Nettoyage de la réponse Gemini (peut contenir des balises ```json)
+        raw_text = response.text.strip()
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("```")[1]
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:]
+        raw_text = raw_text.strip()
+
+        metadonnees_ia = json.loads(raw_text)
+
         # INJECTION NON-DESTRUCTIVE : On ajoute les données IA dans un bloc dédié
         json_structure["metadata_ia"] = metadonnees_ia
-        
-        logger.info("✅ Orchestration sémantique terminée avec succès !")
+
+        logger.info("✅ Orchestration sémantique Gemini terminée avec succès !")
         return json_structure
 
     except Exception as e:
-        logger.error(f"❌ Erreur Chef d'Orchestre IA : {e}")
+        logger.error(f"❌ Erreur Chef d'Orchestre Gemini : {e}")
         return json_structure
 
 

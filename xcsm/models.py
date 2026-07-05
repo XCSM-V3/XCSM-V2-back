@@ -65,8 +65,8 @@ class FichierSource(models.Model):
     mongo_transforme_id = models.CharField(max_length=100, null=True, blank=True)
     
     statut_traitement = models.CharField(
-        max_length=20, 
-        choices=[('EN_ATTENTE', 'En attente'), ('TRAITE', 'Traité'), ('ERREUR', 'Erreur')],
+        max_length=20,
+        choices=[('EN_ATTENTE', 'En attente'), ('EN_COURS', 'En cours'), ('TRAITE', 'Traité'), ('ERREUR', 'Erreur')],
         default='EN_ATTENTE'
     )
     
@@ -307,18 +307,27 @@ class Notification(models.Model):
         ('upvote', 'Upvote'),
         ('suggestion_approved', 'Suggestion Approuvée'),
         ('suggestion_rejected', 'Suggestion Rejetée'),
-        ('mention', 'Mention')
+        ('mention', 'Mention'),
+        ('document_traite', 'Document Traité'),
+        ('document_erreur', 'Erreur de Traitement'),
+        ('co_teacher_added', 'Ajouté comme Co-enseignant'),
+        ('co_teacher_removed', 'Retiré comme Co-enseignant'),
+    ]
+    ACTOR_ROLE_CHOICES = [
+        ('enseignant', 'Enseignant'),
+        ('etudiant', 'Étudiant'),
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     destinataire = models.ForeignKey('Utilisateur', on_delete=models.CASCADE, related_name='notifications')
     type_notif = models.CharField(max_length=30, choices=TYPE_CHOICES)
-    
+
     title = models.CharField(max_length=255)
     message = models.TextField()
     link = models.CharField(max_length=255, null=True, blank=True)
     actor_name = models.CharField(max_length=100, null=True, blank=True)
-    
+    actor_role = models.CharField(max_length=20, choices=ACTOR_ROLE_CHOICES, null=True, blank=True)
+
     is_read = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 

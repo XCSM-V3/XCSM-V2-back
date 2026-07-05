@@ -10,8 +10,9 @@ ENV PYTHONUNBUFFERED=1 \
 # Répertoire de travail
 WORKDIR /app
 
-# Installation des dépendances système
-RUN apt-get update && apt-get install -y \
+# Installation des dépendances système (avec retry sur les miroirs instables)
+RUN for i in 1 2 3; do apt-get update -o Acquire::Retries=5 && break || sleep 5; done && \
+    apt-get install -y --no-install-recommends \
     gcc \
     default-libmysqlclient-dev \
     pkg-config \
@@ -24,7 +25,8 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 
 # Installation des dépendances Python
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir "setuptools<82" && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copie du code de l'application
 COPY . .

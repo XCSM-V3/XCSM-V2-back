@@ -1,4 +1,4 @@
-﻿# ============================================
+# ============================================
 # XCSM BACKEND - DEPENDANCES COMPLETES
 # ============================================
 
@@ -39,6 +39,7 @@ python-dotenv==1.0.1
 django-filter==24.3
 
 # ADMIN & UTILITIES
+setuptools<82
 django-import-export==4.3.14
 
 # AUTHENTICATION

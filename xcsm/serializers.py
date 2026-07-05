@@ -308,13 +308,15 @@ class FichierSourceSerializer(serializers.ModelSerializer):
         extra_kwargs = {'matiere': {'required': True}} # Matière obligatoire à l'upload
     
     def get_course_id(self, obj):
-        # Essayer de trouver le cours généré lié à ce fichier (via Matiere)
-        # Note: Notre logique lie le Cours à la Matière, et le Cours au FichierSource?
-        # Non, le modèle Cours n'a pas de lien explicite "fichier_source_id" dans ma modif précédente?
-        # Ah, j'ai oublié d'ajouter un lien direct Cours <-> FichierSource ou Granule <-> FichierSource
-        # Le modèle FichierSource a le lien "enseignant". 
-        # Modèle Granule a "fichier_source".
-        return None 
+        # Aucun lien direct FichierSource -> Cours en base : on retrouve le cours généré
+        # en remontant depuis un de ses granules (fichier_source -> ... -> partie -> cours).
+        from .models import Granule
+        granule = Granule.objects.filter(fichier_source=obj).select_related(
+            'sous_section__section__chapitre__partie'
+        ).first()
+        if granule:
+            return str(granule.sous_section.section.chapitre.partie.cours_id)
+        return None
     
     def get_enseignant_nom(self, obj):
         if obj.enseignant:
@@ -530,6 +532,6 @@ class CommentSerializer(serializers.ModelSerializer):
 class NotificationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Notification
-        fields = ['id', 'type', 'title', 'message', 'link', 'is_read', 'created_at', 'actor_name']
-        
+        fields = ['id', 'type', 'title', 'message', 'link', 'is_read', 'created_at', 'actor_name', 'actor_role']
+
     type = serializers.CharField(source='type_notif')
